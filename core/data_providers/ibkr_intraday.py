@@ -94,13 +94,21 @@ def _update_expanded_csv(sheet_name: str, df: pd.DataFrame) -> bool:
     try:
         if path.exists():
             old = pd.read_csv(path)
-            old["date"] = pd.to_datetime(old["date"], utc=True)
+            old["date"] = pd.to_datetime(old["date"], utc=True, errors="coerce")
+            invalidas = int(old["date"].isna().sum())
+            if invalidas:
+                logger.warning(f"{path.name}: {invalidas} filas con fecha invalida descartadas")
+                old = old.dropna(subset=["date"])
             combined = pd.concat([old, new], ignore_index=True)
         else:
             combined = new
         combined = (combined.drop_duplicates(subset=["date"], keep="last")
                             .sort_values("date").reset_index(drop=True))
-        combined.to_csv(path, index=False)
+        # Escritura atomica: tmp + os.replace evita un CSV truncado si el
+        # proceso muere a mitad de escritura.
+        tmp = path.with_name(path.name + ".tmp")
+        combined.to_csv(tmp, index=False)
+        os.replace(tmp, path)
         logger.info(f"CSV expandido actualizado: {path.name} ({len(combined)} barras)")
         return True
     except Exception as e:
@@ -375,10 +383,6 @@ def _save_intradia(all_data: Dict[str, pd.DataFrame], existing_data: Dict[str, p
     with pd.ExcelWriter(INTRADIA_FILE, engine='openpyxl') as writer:
         csv_frames = []
         for sheet_name, df in all_data.items():
-            # Primero se fusiona en el CSV expandido (fuente de verdad del
-            # pipeline de features) con los Datetime originales en UTC.
-            _update_expanded_csv(sheet_name, df)
-
             df = df.copy()
             if 'Datetime' in df.columns:
                 df['Datetime'] = (
@@ -391,6 +395,12 @@ def _save_intradia(all_data: Dict[str, pd.DataFrame], existing_data: Dict[str, p
             csv_df = df.copy()
             csv_df.insert(1, 'symbol', sheet_name.replace('_1H', ''))
             csv_frames.append(csv_df)
+
+    # Tras el commit del Excel se fusiona cada sheet en su CSV expandido
+    # (fuente de verdad del pipeline). Si el Excel falla, esto no se ejecuta
+    # y no queda estado divergente entre fuentes.
+    for sheet_name, df in all_data.items():
+        _update_expanded_csv(sheet_name, df)
 
     if csv_frames:
         csv_all = pd.concat(csv_frames, ignore_index=True)

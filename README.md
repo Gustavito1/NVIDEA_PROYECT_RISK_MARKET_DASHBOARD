@@ -23,7 +23,7 @@ python run_nvda.py --inspect          # diagnóstico de datos
 
 ```
 DB remota (ibsync/Docker) ──┐  ohlcv NVDA+SOXQ 1h
-DB remota (news) ──────────┴→ features (108) → labels BUY/HOLD/SELL
+DB remota (news) ──────────┴→ features (75 cols · 48 al modelo) → labels BUY/HOLD/SELL
  (fallback: CSVs locales + IBKR directo)         │
                               │
                      ┌────────┴─────────┐
@@ -43,7 +43,7 @@ core/
   config.py                    # rutas, activos, parámetros 1h/day-trading
   data_providers/db_source.py  # DB remota PostgreSQL (Aiven, SOLO LECTURA): ohlcv + news
   data_providers/ibkr_intraday.py  # descarga 1h chunked + recent desde IBKR (fallback)
-  feature_engineering.py       # 108 features (técnicas, sesión/VWAP/ORB, SOX, patrones)
+  feature_engineering.py       # 75 columnas (48 al modelo): técnicas, sesión/VWAP/ORB, SOX, patrones
   labels.py                    # target por barras + grid tau
   pattern_detector.py          # 57 patrones (heredado de PRECIARIO_OIL)
   news/alpha_vantage.py        # sentimiento point-in-time / lag-1 (sin leakage)

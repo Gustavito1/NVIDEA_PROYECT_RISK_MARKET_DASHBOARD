@@ -6,31 +6,21 @@ from dataclasses import dataclass
 from typing import List
 from pathlib import Path
 import os
+import re
 
+_base_dir = Path(__file__).parent.parent
 try:
-    def _load_env_file(path: Path, override: bool = False) -> None:
-        """Parser minimalista de .env (soporta APP_PROFILE con override)."""
-        try:
-            with open(path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        key, _, val = line.partition("=")
-                        key, val = key.strip(), val.strip()
-                        if override:
-                            os.environ[key] = val
-                        else:
-                            os.environ.setdefault(key, val)
-        except FileNotFoundError:
-            pass
-
-    _base_dir = Path(__file__).parent.parent
-    _load_env_file(_base_dir / ".env")
+    from dotenv import load_dotenv
+    load_dotenv(_base_dir / ".env")
     # Perfil de tu companero: .env define APP_PROFILE y .env.{perfil} sobreescribe.
     _profile = os.environ.get("APP_PROFILE", "").strip()
     if _profile:
-        _load_env_file(_base_dir / f".env.{_profile}", override=True)
-except Exception:
+        if re.fullmatch(r"[\w-]+", _profile):
+            load_dotenv(_base_dir / f".env.{_profile}", override=True)
+        else:
+            raise ValueError(f"APP_PROFILE invalido (se ignora): {_profile!r}")
+except ImportError:
+    # python-dotenv no instalado: se continua con las variables del entorno.
     pass
 
 BASE_DIR = Path(__file__).parent.parent
@@ -211,6 +201,9 @@ NEWS_DAILY_FILE = _project_path(
 # Webhook opcional (Synology Chat u otro): URL completa con token.
 NVDA_WEBHOOK_URL = os.environ.get("NVDA_WEBHOOK_URL", "")
 NVDA_WEBHOOK_ENABLED = os.environ.get("NVDA_WEBHOOK_ENABLED", "0") == "1"
+# Verificacion TLS del webhook: 1 (default) valida el certificado; 0 solo si
+# el NAS usa certificado autofirmado (riesgo MITM aceptado explicitamente).
+NVDA_WEBHOOK_VERIFY_SSL = os.environ.get("NVDA_WEBHOOK_VERIFY_SSL", "1") == "1"
 
 # Solo emitir alerta push si la probabilidad de BUY/SELL supera este umbral;
 # si no, la senal queda como HOLD (menos ruido y menos costes).
@@ -237,6 +230,7 @@ NON_FEATURE_COLUMNS = {
     "Datetime", "date_ny", "label", "future_ret", "tau",
     "label_start", "label_end", "label_horizon_bars",
     "Open", "High", "Low", "Close", "Volume", "adj_close",
+    "Adj Close",
     "sox_close", "sox_volume", "vwap", "orb_high", "orb_low",
     "sma_20", "sma_50", "bb_mid", "macd", "macd_signal", "macd_hist",
 }

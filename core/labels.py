@@ -40,6 +40,18 @@ LABEL_HOLD = "HOLD"
 LABEL_SELL = "SELL"
 
 
+def bar_end_time(ts) -> pd.Timestamp:
+    """
+    Fin de la barra cuyo timestamp es su INICIO.
+
+    La primera barra RTH (09:30 ET, timestamp con minuto :30) dura 30 min
+    (09:30-10:00); el resto de barras RTH duran 60 min. Se usa para detectar
+    la barra en curso sin cometer un off-by-one en la primera barra del dia.
+    """
+    t = pd.to_datetime(ts, utc=True)
+    return t + (pd.Timedelta(minutes=30) if t.minute == 30 else pd.Timedelta(hours=1))
+
+
 def _compute_tau(df: pd.DataFrame, mode: str, k: float, tau_pct: float,
                  tau_min: float, tau_max: float) -> pd.Series:
     vol_col = "log_ret_1b" if MODEL_TARGET_MODE == "log" and "log_ret_1b" in df else "ret_1b"
@@ -70,7 +82,7 @@ def compute_labels(df: pd.DataFrame,
     # Si la ultima barra aun no ha cerrado (descarga a mitad de sesion), no puede
     # usarse como futuro ni etiquetarse.
     now_utc = pd.Timestamp.now(tz="UTC")
-    if len(out) and pd.Timestamp(out["Datetime"].iloc[-1]) + pd.Timedelta(hours=1) > now_utc:
+    if len(out) and bar_end_time(out["Datetime"].iloc[-1]) > now_utc:
         logger.info("Ultima barra en curso: se excluye del etiquetado")
         out = out.iloc[:-1].reset_index(drop=True)
 

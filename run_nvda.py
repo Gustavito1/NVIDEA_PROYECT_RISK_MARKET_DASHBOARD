@@ -55,7 +55,8 @@ def step_1_intradia(months: int = None) -> bool:
         return False
 
 
-def step_2_features(include_patterns: bool = False) -> bool:
+def step_2_features(include_patterns: bool = False):
+    """Construye features. Devuelve el DataFrame (None si falla) para reutilizarlo."""
     logger.info("=" * 60)
     logger.info("PASO 2: Feature engineering intradia")
     logger.info("=" * 60)
@@ -65,14 +66,14 @@ def step_2_features(include_patterns: bool = False) -> bool:
         df = build_features(include_patterns=include_patterns, save=True)
         if df is None:
             logger.error("No se generaron features (faltan datos intradia)")
-            return False
+            return None
         logger.info(f"Features: {len(df)} filas x {len(df.columns)} columnas -> {FEATURES_CSV}")
-        return True
+        return df
     except Exception as e:
         logger.error(f"Error en paso 2: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        return None
 
 
 def step_3_labels() -> bool:
@@ -112,26 +113,34 @@ def step_4_snapshot() -> bool:
         return False
 
 
-def step_5_predict(dry_run: bool = False, model_name: str = "logreg") -> bool:
+def step_5_predict(dry_run: bool = False, model_name: str = "logreg",
+                   features_df=None) -> dict:
+    """
+    Predice sobre la ultima barra cerrada.
+
+    Devuelve {"status": "ok"|"sin_modelo"|"error", "barra": iso|None,
+    "pred": dict|None} para que el caller pueda deduplicar por barra predicha
+    y distinguir "sin modelo entrenado" de un error real.
+    """
+    from core.nvda_predictor import ModelNotTrainedError, predict_latest, format_signal_message
+
     logger.info("=" * 60)
     logger.info("PASO 5: Prediccion sobre la ultima barra cerrada")
     logger.info("=" * 60)
     try:
-        from core.nvda_predictor import predict_latest, format_signal_message
-        pred = predict_latest(model_name=model_name)
+        pred = predict_latest(model_name=model_name, features_df=features_df)
         logger.info("\n" + format_signal_message(pred))
 
         from core.notifications import send_signal
         send_signal(pred, dry_run=dry_run)
 
-        return True
+        return {"status": "ok", "barra": pred["datetime_barra"], "pred": pred}
+    except ModelNotTrainedError:
+        logger.info("Aun no existe modelo entrenado. Entrena con: python run_nvda.py --train")
+        return {"status": "sin_modelo", "barra": None, "pred": None}
     except Exception as e:
-        from core.nvda_predictor import ModelNotTrainedError
-        if isinstance(e, ModelNotTrainedError):
-            logger.info("Aun no existe modelo entrenado. Entrena con: python run_nvda.py --train")
-            return True
         logger.error(f"Error en paso 5: {e}")
-        return False
+        return {"status": "error", "barra": None, "pred": None}
 
 
 def _datos_desde_db() -> bool:
@@ -158,14 +167,15 @@ def run_pipeline(args) -> int:
     logger.info(f"Hora inicio: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     steps = []
+    feat_df = None
 
     if not args.skip_intradia:
         if _datos_desde_db():
             logger.info("PASO 1 omitido: los datos OHLCV vienen de la DB remota (ibsync en Docker)")
-            steps.append(("Intradia", True))
+            steps.append(("Intradia", "OK (DB)"))
         else:
             intradia_ok = step_1_intradia(months=args.months)
-            steps.append(("Intradia", intradia_ok))
+            steps.append(("Intradia", "OK" if intradia_ok else "ERROR"))
             if not intradia_ok:
                 if _hay_datos_locales():
                     logger.warning(
@@ -176,25 +186,28 @@ def run_pipeline(args) -> int:
                     logger.error("Flujo detenido: sin IBKR y sin datos intradia locales.")
                     return 1
     if not args.skip_features:
-        steps.append(("Features", step_2_features(include_patterns=args.patterns)))
+        feat_df = step_2_features(include_patterns=args.patterns)
+        steps.append(("Features", "OK" if feat_df is not None else "ERROR"))
     if not args.skip_labels:
-        steps.append(("Labels", step_3_labels()))
+        steps.append(("Labels", "OK" if step_3_labels() else "ERROR"))
     if not args.skip_snapshot:
-        steps.append(("Snapshot", step_4_snapshot()))
+        steps.append(("Snapshot", "OK" if step_4_snapshot() else "ERROR"))
     if not args.skip_predict:
-        steps.append(("Prediccion", step_5_predict(dry_run=args.dry_run,
-                                                    model_name=args.model)))
+        res = step_5_predict(dry_run=args.dry_run, model_name=args.model,
+                             features_df=feat_df)
+        steps.append(("Prediccion",
+                      {"ok": "OK", "sin_modelo": "SIN MODELO", "error": "ERROR"}[res["status"]]))
 
     duration = (datetime.now() - start_time).total_seconds()
     logger.info("")
     logger.info("=" * 60)
     logger.info("RESUMEN")
     logger.info("=" * 60)
-    for name, ok in steps:
-        logger.info(f"  {name}: {'OK' if ok else 'ERROR'}")
+    for name, estado in steps:
+        logger.info(f"  {name}: {estado}")
     logger.info(f"Duracion: {duration:.1f}s")
 
-    return 0 if all(ok for _, ok in steps) else 1
+    return 0 if all(estado != "ERROR" for _, estado in steps) else 1
 
 
 def run_scheduled(args) -> None:
@@ -214,27 +227,35 @@ def run_scheduled(args) -> None:
 def run_bot(args) -> None:
     """
     BOT HORARIO: en cada cierre de barra RTH (minuto 0-5 de cada hora)
-    descarga las ultimas 48h, recalcula features y emite la senal.
+    actualiza datos, recalcula features y emite la senal.
 
-    - Solo dias de semana y horario de mercado NY.
-    - Una ejecucion por barra (dedupe por hora).
+    - Solo dias de semana (sin festivos NASDAQ) y horario de mercado NY.
+    - Dedupe por BARRA PREDICHA (no por reloj): evita senales duplicadas en
+      cierres anticipados o con feed retrasado.
+    - La ultima barra del dia (cierre 16:00 ET) admite reintentos hasta el
+      minuto BOT_RUN_MINUTE_WINDOW-1.
     - --dry-run no envia webhook.
     """
     from zoneinfo import ZoneInfo
-    from core.config import BOT_RUN_MINUTE_WINDOW, BOT_POLL_SECONDS
+    from core.config import BOT_RUN_MINUTE_WINDOW, BOT_POLL_SECONDS, NASDAQ_HOLIDAYS
+    from core.labels import bar_end_time
 
     ny_tz = ZoneInfo("America/New_York")
     logger.info(f"BOT NVDA iniciado (poll {BOT_POLL_SECONDS}s, dry_run={args.dry_run})")
     last_bar_key = None
+    last_predicted_bar = None
 
     while True:
         try:
             now = datetime.now(ny_tz)
             es_semana = now.weekday() < 5
-            en_sesion = (9, 30) <= (now.hour, now.minute) <= (16, 0)
+            es_festivo = now.strftime("%Y-%m-%d") in NASDAQ_HOLIDAYS
+            # La ultima barra cierra a las 16:00: se admite la ventana completa
+            # hasta (16, WINDOW-1) para poder reintentar el cierre del dia.
+            en_sesion = (9, 30) <= (now.hour, now.minute) <= (16, BOT_RUN_MINUTE_WINDOW - 1)
             en_ventana = now.minute < BOT_RUN_MINUTE_WINDOW
 
-            if es_semana and en_sesion and en_ventana:
+            if es_semana and not es_festivo and en_sesion and en_ventana:
                 bar_key = now.strftime("%Y-%m-%d %H:00")
                 if bar_key != last_bar_key:
                     logger.info("=" * 60)
@@ -249,16 +270,37 @@ def run_bot(args) -> None:
                         updated = run_intraday_update(recent=True)
                     if not updated:
                         logger.warning(
-                            "No se ejecuto prediccion: no llego una actualizacion de IBKR "
+                            "No se ejecuto prediccion: no llego una actualizacion de datos "
                             "(se reintentara mientras siga la ventana de la barra)"
                         )
                         time.sleep(BOT_POLL_SECONDS)
                         continue
 
-                    feat_ok = step_2_features(include_patterns=args.patterns)
-                    pred_ok = step_5_predict(dry_run=args.dry_run, model_name=args.model) if feat_ok else False
-                    if pred_ok:
-                        # Barra procesada: no se reintenta hasta la siguiente.
+                    feat_df = step_2_features(include_patterns=args.patterns)
+                    res = step_5_predict(dry_run=args.dry_run, model_name=args.model,
+                                         features_df=feat_df) if feat_df is not None \
+                        else {"status": "error", "barra": None}
+
+                    if res["status"] == "ok":
+                        if res["barra"] == last_predicted_bar:
+                            logger.info(
+                                f"Barra {res['barra']} ya predicha antes: "
+                                "senal duplicada evitada (feed posiblemente desfasado)"
+                            )
+                        else:
+                            last_predicted_bar = res["barra"]
+                            # Aviso de frescura: si la barra predicha ya es vieja,
+                            # los datos estan desfasados y la senal es stale.
+                            antiguedad = (datetime.now(ny_tz) -
+                                          bar_end_time(res["barra"]).tz_convert(ny_tz)).total_seconds() / 60
+                            if antiguedad > 90:
+                                logger.warning(
+                                    f"Datos desfasados: la barra predicha ({res['barra']}) "
+                                    f"cerro hace {antiguedad:.0f} min"
+                                )
+                        last_bar_key = bar_key
+                    elif res["status"] == "sin_modelo":
+                        logger.info("Sin modelo entrenado: no se reintenta esta barra")
                         last_bar_key = bar_key
                     else:
                         logger.warning(
@@ -368,8 +410,8 @@ def main():
         return 0 if step_train(args) else 1
 
     if args.predict:
-        return 0 if step_5_predict(dry_run=args.dry_run,
-                                   model_name=args.model) else 1
+        res = step_5_predict(dry_run=args.dry_run, model_name=args.model)
+        return 0 if res["status"] != "error" else 1
 
     if args.bot:
         run_bot(args)

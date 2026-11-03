@@ -44,8 +44,9 @@ from sklearn.metrics import (accuracy_score, balanced_accuracy_score,
                              precision_recall_fscore_support, roc_auc_score)
 
 from core.config import (DATA_START_DATE, DAYTRADE_HORIZON_BARS, DAYTRADE_TAU_PCT,
-                         FEATURES_CSV, LABELED_CSV, MODEL_EMBARGO_BARS,
-                         MODEL_PURGE_BARS, MODELS_DIR, NEWS_ARTICLES_FILE,
+                         FEATURES_CSV, INTRADAY_BARS_PER_DAY, LABELED_CSV,
+                         MODEL_EMBARGO_BARS, MODEL_PURGE_BARS, MODELS_DIR,
+                         NEWS_ARTICLES_FILE, PREDICT_STRICT_SUPPORT,
                          SIGNAL_PROBA_THRESHOLD, WEB_DIR, WEB_HTML_NAME)
 from core.feature_engineering import (compute_intraday_context,
                                       compute_technical_features,
@@ -313,8 +314,10 @@ def load_news() -> pd.DataFrame:
                 news = arts.rename(columns={"score": "sentiment_score",
                                             "label": "sentiment_label"})
             elif DATA_SOURCE == "db":
-                logger.error("Noticias: DATA_SOURCE=db y la DB no devolvio articulos")
+                raise RuntimeError("DATA_SOURCE=db y la DB no devolvio articulos")
         except Exception as e:
+            if DATA_SOURCE == "db":
+                raise
             logger.warning(f"Noticias: DB no disponible ({e}) - fallback a CSV")
 
     if news is None:
@@ -337,6 +340,7 @@ def load_news() -> pd.DataFrame:
                                         np.where(news["impact_score"] >= q_lo, "Medio", "Bajo"))
     else:
         news["impact_level"] = "Bajo"
+    news["sentiment_label"] = news["sentiment_label"].replace("", np.nan)
     news["sentiment_label_es"] = news["sentiment_label"].fillna(
         news["sentiment_score"].map(sentiment_from_score))
     return news
@@ -604,11 +608,20 @@ def main() -> int:
     prod_feats = json.loads((MODELS_DIR / "feature_list_logreg.json").read_text(encoding="utf-8"))
     p_live = prod_model.predict_proba(_X(feats_df.tail(1), prod_feats))[0]
     live_label = IDX_TO_LABEL[int(np.argmax(p_live))]
-    live_signal = "HOLD"
+    live_signal_model = "HOLD"
     if live_label == "BUY" and p_live[0] >= SIGNAL_PROBA_THRESHOLD:
-        live_signal = "BUY"
+        live_signal_model = "BUY"
     elif live_label == "SELL" and p_live[2] >= SIGNAL_PROBA_THRESHOLD:
-        live_signal = "SELL"
+        live_signal_model = "SELL"
+
+    # Politica de soporte (consistente con core/nvda_predictor.py): el modelo
+    # solo entreno con las primeras (INTRADAY_BARS_PER_DAY - H) barras de cada
+    # sesion. Fuera de ese soporte la senal no esta validada y, con
+    # PREDICT_STRICT_SUPPORT, no se emite (SIN_SENAL).
+    max_supported = INTRADAY_BARS_PER_DAY - DAYTRADE_HORIZON_BARS
+    bar_of_day = int(last_row["bar_of_day"]) if "bar_of_day" in feats_df.columns else None
+    fuera_de_soporte = bar_of_day is not None and bar_of_day > max_supported
+    live_signal = "SIN_SENAL" if (fuera_de_soporte and PREDICT_STRICT_SUPPORT) else live_signal_model
 
     # ---------------- 7 sesiones de backtest ----------------
     last_sessions = sessions[-7:]
@@ -677,13 +690,13 @@ def main() -> int:
         f'<div class="factor-value {tone}">{esc(v)}</div></div>'
         for k, v, tone in factors)
 
-    sig_class = live_signal.lower()
-    success_p = {"BUY": float(p_live[0]), "HOLD": float(p_live[1]), "SELL": float(p_live[2])}[live_signal]
+    sig_class = live_signal_model.lower()
+    success_p = {"BUY": float(p_live[0]), "HOLD": float(p_live[1]), "SELL": float(p_live[2])}[live_signal_model]
     success_hist = {
         "BUY": set_d["holdout"]["precision_BUY"],
         "HOLD": set_d["holdout"]["precision_HOLD"],
         "SELL": set_d["holdout"]["precision_SELL"],
-    }[live_signal]
+    }[live_signal_model]
 
     # ---------------- noticias ----------------
     pos_news = news_hist[news_hist["polarity"] == "Positiva"].sort_values(

@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 OHLCV_TIMEFRAME = os.getenv("DB_OHLCV_TIMEFRAME", "intraday")
 CONNECT_TIMEOUT_SEC = int(os.getenv("DB_CONNECT_TIMEOUT", "10"))
+STATEMENT_TIMEOUT_MS = int(os.getenv("DB_STATEMENT_TIMEOUT", "30000"))
 
 
 def get_connection():
@@ -41,8 +42,8 @@ def get_connection():
     Abre una conexion psycopg2 en modo SOLO LECTURA.
 
     Misma interfaz que el codigo de tu companero; ademas fuerza
-    `default_transaction_read_only` para que ninguna consulta pueda escribir
-    aunque se equivoque la SQL.
+    `default_transaction_read_only` y `statement_timeout` para que ninguna
+    consulta pueda escribir ni bloquear el pipeline indefinidamente.
     """
     import psycopg2  # lazy: el proyecto funciona sin psycopg2 (fallback CSV)
 
@@ -53,9 +54,10 @@ def get_connection():
         password=os.getenv("DB_PASSWORD"),
         host=os.getenv("DB_HOST"),
         port=os.getenv("DB_PORT"),
-        sslmode=os.getenv("DB_SSL"),
+        sslmode=os.getenv("DB_SSL") or "require",
         connect_timeout=CONNECT_TIMEOUT_SEC,
-        options="-c default_transaction_read_only=on",
+        options=("-c default_transaction_read_only=on "
+                 f"-c statement_timeout={STATEMENT_TIMEOUT_MS}"),
     )
     connection.set_session(readonly=True, autocommit=False)
     return connection
@@ -63,16 +65,22 @@ def get_connection():
 
 def ping() -> bool:
     """True si la DB responde a un SELECT trivial."""
+    conn = None
     try:
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                cur.fetchone()
-        conn.rollback()
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
         return True
     except Exception as e:
         logger.debug(f"DB no disponible: {e}")
         return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _query_df(sql: str, params=()) -> Optional[pd.DataFrame]:
@@ -111,8 +119,12 @@ def load_ohlcv_sheet(sheet: str,
 
     - timeframe configurable via DB_OHLCV_TIMEFRAME (default 'intraday')
     - corte temporal DATA_START_DATE (SOXQ inicia 2021-06-11)
-    - adj_close solo se expone si la columna tiene datos; si esta vacia se
-      omite para que el pipeline use Close (como con los CSVs legacy).
+    - adj_close solo se expone si esta COMPLETO (evita empalmar series
+      ajustadas con crudas y generar retornos falsos); si no, se usa Close.
+
+    Devuelve None ante cualquier error (para que el fallback 'auto' funcione)
+    y un DataFrame con el esquema del pipeline (posiblemente vacio) si la DB
+    responde sin datos.
     """
     symbol = _SYMBOL_BY_SHEET.get(sheet, sheet.replace("_1H", ""))
     start = start_date or DATA_START_DATE
@@ -120,32 +132,39 @@ def load_ohlcv_sheet(sheet: str,
     sql = """
         SELECT date, open, high, low, close, volume, adj_close
         FROM ohlcv
-        WHERE symbol = %s AND timeframe = %s AND date >= %s
+        WHERE symbol = %s AND timeframe = %s AND date >= %s::date
         ORDER BY date
     """
     df = _query_df(sql, (symbol, OHLCV_TIMEFRAME, start))
     if df is None:
         return None
+
+    cols = ["Datetime", "Open", "High", "Low", "Close", "Volume"]
     if df.empty:
         logger.warning(f"DB: sin barras {symbol}/{OHLCV_TIMEFRAME} desde {start}")
-        return df
+        return pd.DataFrame(columns=cols)
 
-    out = pd.DataFrame()
-    out["Datetime"] = pd.to_datetime(df["date"], utc=True)
-    for src, dst in [("open", "Open"), ("high", "High"), ("low", "Low"),
-                     ("close", "Close"), ("volume", "Volume")]:
-        out[dst] = pd.to_numeric(df[src], errors="coerce")
-    out["Volume"] = out["Volume"].fillna(0).astype("int64")
+    try:
+        out = pd.DataFrame()
+        out["Datetime"] = pd.to_datetime(df["date"], utc=True, errors="coerce")
+        for src, dst in [("open", "Open"), ("high", "High"), ("low", "Low"),
+                         ("close", "Close"), ("volume", "Volume")]:
+            out[dst] = pd.to_numeric(df[src], errors="coerce")
+        out = out.dropna(subset=["Datetime", "Open", "High", "Low", "Close"])
+        out["Volume"] = out["Volume"].fillna(0).astype("int64")
 
-    adj = pd.to_numeric(df["adj_close"], errors="coerce")
-    if adj.notna().mean() >= 0.5:
-        out["Adj Close"] = adj.fillna(out["Close"])
-        logger.info(f"{sheet}: adj_close disponible ({adj.notna().sum()}/{len(adj)})")
-    else:
-        logger.info(f"{sheet}: adj_close sin datos - se usa Close crudo")
+        adj = pd.to_numeric(df["adj_close"], errors="coerce")
+        if len(adj) and adj.notna().all():
+            out["Adj Close"] = adj.loc[out.index]
+            logger.info(f"{sheet}: adj_close completo - se usa como precio base")
+        else:
+            logger.info(f"{sheet}: adj_close vacio/incompleto - se usa Close crudo")
 
-    out = out.dropna(subset=["Datetime", "Open", "High", "Low", "Close"])
-    out = out.drop_duplicates(subset=["Datetime"], keep="last").reset_index(drop=True)
+        out = out.drop_duplicates(subset=["Datetime"], keep="last").reset_index(drop=True)
+    except Exception as e:
+        logger.error(f"Error transformando barras {sheet} de la DB: {e}")
+        return None
+
     logger.info(f"{sheet}: {len(out)} barras desde la DB "
                 f"({out['Datetime'].min()} -> {out['Datetime'].max()})")
     return out
@@ -163,6 +182,9 @@ def load_news_articles() -> Optional[pd.DataFrame]:
 
     La tabla no guarda ticker (la limpieza de tu companero deja solo NVDA),
     por lo que se fija ticker='NVDA'. score = sentiment_score de la fila.
+
+    Devuelve None ante cualquier error (fallback 'auto') y un DataFrame con el
+    esquema normalizado (posiblemente vacio) si la DB responde sin articulos.
     """
     sql = """
         SELECT title, url, time_published, summary, source,
@@ -173,20 +195,34 @@ def load_news_articles() -> Optional[pd.DataFrame]:
     df = _query_df(sql)
     if df is None:
         return None
+
+    cols = ["published_utc", "ticker", "relevance_score", "score",
+            "label", "title", "url", "source"]
     if df.empty:
         logger.warning("DB: tabla news vacia")
-        return df
+        return pd.DataFrame(columns=cols)
 
-    out = pd.DataFrame()
-    out["published_utc"] = pd.to_datetime(df["time_published"], utc=True)
-    out["ticker"] = "NVDA"
-    out["relevance_score"] = pd.to_numeric(df["relevance_score"], errors="coerce").fillna(1.0)
-    out["score"] = pd.to_numeric(df["sentiment_score"], errors="coerce").fillna(0.0)
-    out["label"] = df["sentiment_label"].fillna("")
-    out["title"] = df["title"].fillna("")
-    out["url"] = df["url"].fillna("")
-    out["source"] = df["source"].fillna("")
-    out = out.dropna(subset=["published_utc"]).reset_index(drop=True)
+    try:
+        out = pd.DataFrame()
+        # errors="coerce": una fila con fecha corrupta no puede tumbar el paso
+        # de features completo (ademas permite que el fallback 'auto' actue).
+        out["published_utc"] = pd.to_datetime(df["time_published"], utc=True,
+                                              errors="coerce")
+        out["ticker"] = "NVDA"
+        out["relevance_score"] = pd.to_numeric(df["relevance_score"], errors="coerce").fillna(1.0)
+        out["score"] = pd.to_numeric(df["sentiment_score"], errors="coerce").fillna(0.0)
+        out["label"] = df["sentiment_label"].fillna("")
+        out["title"] = df["title"].fillna("")
+        out["url"] = df["url"].fillna("")
+        out["source"] = df["source"].fillna("")
+        invalidas = int(out["published_utc"].isna().sum())
+        if invalidas:
+            logger.warning(f"DB: {invalidas} noticias con fecha invalida descartadas")
+        out = out.dropna(subset=["published_utc"]).reset_index(drop=True)
+    except Exception as e:
+        logger.error(f"Error transformando noticias de la DB: {e}")
+        return None
+
     logger.info(f"NOTICIAS: {len(out)} articulos desde la DB "
                 f"({out['published_utc'].min()} -> {out['published_utc'].max()})")
     return out

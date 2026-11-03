@@ -53,6 +53,8 @@ def _load_artifacts(model_name: str = "logreg"):
         )
     if not feature_path.exists():
         raise ModelNotTrainedError(f"Falta {feature_path} (artefacto del entrenamiento)")
+    if not label_path.exists():
+        raise ModelNotTrainedError(f"Falta {label_path} (artefacto del entrenamiento)")
 
     model = joblib.load(model_path)
     features = json.loads(feature_path.read_text(encoding="utf-8"))
@@ -61,26 +63,35 @@ def _load_artifacts(model_name: str = "logreg"):
 
 
 def predict_latest(model_name: str = "logreg", include_patterns: bool = False,
-                   threshold: Optional[float] = None) -> Dict:
+                   threshold: Optional[float] = None,
+                   features_df: Optional[pd.DataFrame] = None) -> Dict:
     """
     Predice sobre la ultima barra con features validas.
+
+    Args:
+        features_df: features ya construidas (p.ej. por el paso 2 del pipeline)
+            para no reconstruir todo el dataset en cada inferencia.
 
     Returns:
         dict con label, label_sin_umbral, probabilidades, datetime_barra,
         close, threshold y modelo.
     """
     from core.feature_engineering import build_features
+    from core.labels import bar_end_time
 
     model, features, label_map = _load_artifacts(model_name)
 
-    df = build_features(include_patterns=include_patterns, save=False)
+    if features_df is not None and not features_df.empty:
+        df = features_df.copy().reset_index(drop=True)
+    else:
+        df = build_features(include_patterns=include_patterns, save=False)
     if df is None or df.empty:
         raise RuntimeError("No se pudieron construir features (faltan datos intradia)")
 
-    # 1. Nunca predecir sobre barra en curso (mismo criterio que labels.py:
-    #    la barra con timestamp t cubre [t, t+1h); las barras son de 1 hora).
+    # 1. Nunca predecir sobre barra en curso (mismo criterio que labels.py,
+    #    incluida la primera barra RTH de 30 min).
     now_utc = pd.Timestamp.now(tz="UTC")
-    if len(df) and pd.to_datetime(df["Datetime"].iloc[-1], utc=True) + pd.Timedelta(hours=1) > now_utc:
+    if len(df) and bar_end_time(df["Datetime"].iloc[-1]) > now_utc:
         logger.info("Ultima barra en curso: se predice sobre la ultima barra CERRADA")
         df = df.iloc[:-1].reset_index(drop=True)
     if df.empty:
@@ -115,16 +126,20 @@ def predict_latest(model_name: str = "logreg", include_patterns: bool = False,
     last_idx = X.index[-1]
     row = X.loc[[last_idx]]
     proba = model.predict_proba(row)[0]
+    # El mapping indice->clase sale de model.classes_ (no se asume [0,1,2]).
+    classes = [int(c) for c in getattr(model, "classes_", range(len(proba)))]
     idx = int(np.argmax(proba))
 
-    probs = {label_map.get(i, str(i)): round(float(proba[i]), 4) for i in range(len(proba))}
-    raw_label = label_map.get(idx, "HOLD")
+    raw_probs = {label_map.get(c, str(c)): float(proba[i]) for i, c in enumerate(classes)}
+    probs = {k: round(v, 4) for k, v in raw_probs.items()}
+    raw_label = label_map.get(classes[idx], "HOLD")
     thr = SIGNAL_PROBA_THRESHOLD if threshold is None else threshold
 
+    # Umbral sobre la probabilidad CRUDA (no sobre el redondeo a 4 decimales).
     label = raw_label
-    if raw_label == "BUY" and probs.get("BUY", 0) < thr:
+    if raw_label == "BUY" and raw_probs.get("BUY", 0.0) < thr:
         label = "HOLD"
-    elif raw_label == "SELL" and probs.get("SELL", 0) < thr:
+    elif raw_label == "SELL" and raw_probs.get("SELL", 0.0) < thr:
         label = "HOLD"
 
     # 3. Modo estricto: fuera del soporte de entrenamiento no se emite señal.
@@ -144,7 +159,9 @@ def predict_latest(model_name: str = "logreg", include_patterns: bool = False,
         "close": float(df.loc[last_idx, "Close"]) if "Close" in df.columns else None,
         "threshold": thr,
         "modelo": model_name,
-        "direccion": ("SUBE" if label == "BUY" else ("BAJA" if label == "SELL" else "LATERAL")),
+        "direccion": (None if label == "SIN_SENAL" else
+                      ("SUBE" if label == "BUY" else
+                       ("BAJA" if label == "SELL" else "LATERAL"))),
         "fuera_de_soporte_entrenamiento": fuera_de_soporte,
         "advertencias": advertencias,
     }

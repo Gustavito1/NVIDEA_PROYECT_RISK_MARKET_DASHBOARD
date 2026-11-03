@@ -68,15 +68,27 @@ def guardar_excel(nvda, soxq) -> None:
 
 
 def main() -> int:
+    import core.config as config
+    import core.feature_engineering as fe
+
     backup = None
     if INTRADIA_FILE.exists():
         backup = INTRADIA_FILE.read_bytes()
         print("[i] Datos reales detectados: se respaldan y restauran al final")
 
+    orig_sheets = fe.load_intradia_sheets
+    orig_source = config.DATA_SOURCE
     try:
         nvda, soxq = generar_sintetico()
         print(f"Generadas {len(nvda)} barras NVDA y {len(soxq)} SOXQ")
         guardar_excel(nvda, soxq)
+
+        # Aislamiento total: el test SIEMPRE usa los datos sinteticos, sin DB
+        # remota ni CSVs reales (antes DATA_SOURCE=auto/CSVs expandidos se
+        # comian los datos sinteticos y el test no probaba lo que prometia).
+        config.DATA_SOURCE = "csv"
+        fe.load_intradia_sheets = lambda sheets=("NVDA_1H", "SOXQ_1H"): {
+            "NVDA_1H": nvda.copy(), "SOXQ_1H": soxq.copy()}
 
         feats = build_features(include_patterns=True, save=True)
         if feats is None:
@@ -98,10 +110,12 @@ def main() -> int:
         print("\n[OK] Pipeline sintetico completo")
         return 0
     finally:
+        fe.load_intradia_sheets = orig_sheets
+        config.DATA_SOURCE = orig_source
         if backup is not None:
             INTRADIA_FILE.write_bytes(backup)
             print("[i] Datos reales restaurados. Regenerando features/labels reales...")
-            build_features(include_patterns=True, save=True)
+            build_features(save=True)
             build_labels()
             print("[i] Listo: el proyecto quedo con datos reales")
 

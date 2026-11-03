@@ -40,12 +40,15 @@ nano .env
 | `IBKR_PORT` | TWS: `7497` / Gateway: `4002` paper | Debe coincidir con la aplicación |
 | `IBKR_INTRADIA_CLIENT_ID` | `20` | Cámbialo si otro bot usa el 20 |
 | `INTRADAY_MONTHS_BACK` | `12` | 12 meses = 12 requests (~30s) |
+| `DATA_SOURCE` | `auto` / `db` / `csv` | `auto` = DB remota primero y CSV como fallback (default) |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` / `DB_SSL` | ver `.env.example` | PostgreSQL remoto (Aiven), **solo lectura** |
 | `NVDA_WEBHOOK_ENABLED` | `0`/`1` | Alertas a Synology u otro webhook |
 | `NVDA_WEBHOOK_URL` | URL completa con token | Opcional |
+| `NVDA_WEBHOOK_VERIFY_SSL` | `1` | `0` solo si el NAS usa certificado autofirmado |
 | `SIGNAL_PROBA_THRESHOLD` | `0.40` | Si BUY/SELL no supera → HOLD |
 | `MODEL_HORIZON_BARS` | `4` | Barras futuras del label |
-| `PREDICT_STRICT_SUPPORT` | `0` | `1` = suprime señales en barras fuera del soporte de entrenamiento (barras 4-7 del día con H=4) |
-| `NEWS_*` | ver `.env.example` | Sentimiento Alpha (compañero) |
+| `PREDICT_STRICT_SUPPORT` | `1` | Política activa: solo se emiten señales en barras con soporte de entrenamiento (barras 1-3 del día con H=4, hasta las 11:00 ET). `0` = predecir igualmente marcando "no validada" |
+| `NEWS_*` | ver `.env.example` | Sentimiento (DB remota o CSV del compañero) |
 
 ### TWS instalado localmente
 
@@ -74,7 +77,7 @@ python run_nvda.py --data-only
 ```bash
 source venv/bin/activate
 
-# 1) Datos 1h NVDA+SOXQ exclusivamente desde IBKR
+# 1) Datos 1h NVDA+SOXQ (DB remota primero; IBKR solo como fallback)
 python run_nvda.py --data-only
 
 # 2) Features + labels
@@ -125,7 +128,7 @@ journalctl -u nvda-bot -f
 
 | Síntoma | Causa / solución |
 |---|---|
-| `NO HAY CONEXION CON IBKR` | TWS/Gateway cerrado, sesión sin iniciar o puerto distinto; no se usa otra fuente |
+| `NO HAY CONEXION CON IBKR` | Solo afecta al fallback: la fuente principal es la DB remota (`DATA_SOURCE=auto`). Si persiste, comprueba TWS/Gateway o usa `DATA_SOURCE=csv` con los datos locales |
 | `No llego nextValidId` | API deshabilitada en TWS o firewall |
 | `Client ID already in use` | Cambia `IBKR_INTRADIA_CLIENT_ID` (otro bot conectado) |
 | `No existe modelo entrenado` | Corre `python run_nvda.py --train` |

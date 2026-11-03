@@ -60,18 +60,26 @@ def _load_expanded_csv(sheet: str) -> Optional[pd.DataFrame]:
     """
     Carga el CSV expandido por simbolo (historico 2020+, velas 1h) y aplica el
     corte temporal obligatorio (SOXQ inicia 2021-06-11, descarta pandemia).
+
+    Devuelve None (y no lanza) si el CSV esta corrupto o ilegible, para que el
+    resto de fuentes (DB / Excel) puedan actuar como fallback.
     """
     path = _EXPANDED_CSVS.get(sheet)
     if path is None or not path.exists():
         return None
-    df = pd.read_csv(path, parse_dates=["date"])
-    df = df.rename(columns={"date": "Datetime", "open": "Open", "high": "High",
-                            "low": "Low", "close": "Close", "volume": "Volume"})
-    df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True)
-    cut = pd.Timestamp(DATA_START_DATE, tz="UTC")
-    df = df[df["Datetime"] >= cut]
-    cols = ["Datetime", "Open", "High", "Low", "Close", "Volume"]
-    df = df[cols].sort_values("Datetime").reset_index(drop=True)
+    try:
+        df = pd.read_csv(path, parse_dates=["date"])
+        df = df.rename(columns={"date": "Datetime", "open": "Open", "high": "High",
+                                "low": "Low", "close": "Close", "volume": "Volume"})
+        df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True, errors="coerce")
+        df = df.dropna(subset=["Datetime"])
+        cut = pd.Timestamp(DATA_START_DATE, tz="UTC")
+        df = df[df["Datetime"] >= cut]
+        cols = ["Datetime", "Open", "High", "Low", "Close", "Volume"]
+        df = df[cols].sort_values("Datetime").reset_index(drop=True)
+    except Exception as e:
+        logger.error(f"CSV expandido ilegible ({path.name}): {e} - se usan otras fuentes")
+        return None
     logger.info(f"{sheet}: {len(df)} barras desde {DATA_START_DATE} ({path.name})")
     return df
 
@@ -107,6 +115,46 @@ def load_intradia_sheet(sheet: str) -> Optional[pd.DataFrame]:
     df = df.copy()
     df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True)
     return df.sort_values("Datetime").reset_index(drop=True)
+
+
+def load_intradia_sheets(sheets=("NVDA_1H", "SOXQ_1H")) -> Dict[str, Optional[pd.DataFrame]]:
+    """
+    Carga varias hojas garantizando la MISMA fuente para todas.
+
+    Evita el error silencioso de NVDA desde la DB y SOXQ desde un CSV (o
+    viceversa), que generaria deriva en beta_60b/sox_ratio_z por alineacion
+    temporal distinta entre fuentes.
+    """
+    from core.config import DATA_SOURCE
+
+    if DATA_SOURCE in ("db", "auto"):
+        from core.data_providers.db_source import load_ohlcv_sheet
+        db_data = {s: load_ohlcv_sheet(s) for s in sheets}
+        if all(df is not None and not df.empty for df in db_data.values()):
+            logger.info("Fuente efectiva de intradia: DB remota (todas las hojas)")
+            return db_data
+        if DATA_SOURCE == "db":
+            logger.error("DATA_SOURCE=db y la DB no devolvio todas las hojas")
+            return {s: None for s in sheets}
+        logger.warning("DB incompleta o caida - fuentes LOCALES para todas las hojas")
+
+    resultado: Dict[str, Optional[pd.DataFrame]] = {s: _load_expanded_csv(s) for s in sheets}
+    if all(df is not None and not df.empty for df in resultado.values()):
+        logger.info("Fuente efectiva de intradia: CSVs expandidos locales")
+        return resultado
+
+    from core.data_providers.ibkr_intraday import get_latest_intradia_data
+    data = get_latest_intradia_data()
+    for s in sheets:
+        df = resultado.get(s)
+        if df is None or df.empty:
+            df = data.get(s)
+            if df is not None and not df.empty:
+                df = df.copy()
+                df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True)
+                df = df.sort_values("Datetime").reset_index(drop=True)
+            resultado[s] = df
+    return resultado
 
 
 def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
@@ -345,11 +393,12 @@ def add_pattern_features(df: pd.DataFrame, window: int = 50,
 
 def _drop_warmup(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Elimina filas iniciales sin features suficientes (warmup de rolling windows).
+    Elimina el bloque INICIAL de warmup (rolling windows sin datos suficientes).
 
-    Solo exige las columnas de precio; las de sector (SOXQ) se exigen si tienen
-    datos, pero si estan TODAS en NaN (sin SOXQ cargado) no se usan como filtro
-    —antes un dropna sobre ellas borraba el 100% del dataset sin avisar.
+    Solo se descarta hasta la primera fila donde todas las columnas requeridas
+    son validas. Las filas del MEDIO con NaN (gaps de datos, p.ej. SOXQ sin
+    cubrir unas barras) se conservan: antes un dropna las borraba masivamente,
+    perdia barras de entrenamiento y desalineaba los horizontes de labels.
     """
     required = ["sma_20", "rsi_14", "atr_14", "beta_60b", "sox_ratio_z"]
     subset = []
@@ -360,9 +409,19 @@ def _drop_warmup(df: pd.DataFrame) -> pd.DataFrame:
             logger.warning(f"'{c}' sin datos (warmup imposible) - no se usa como filtro")
             continue
         subset.append(c)
-    before = len(df)
-    out = df.dropna(subset=subset).reset_index(drop=True)
-    logger.info(f"Warmup: {before - len(out)} filas iniciales descartadas ({len(out)} quedan)")
+    if not subset or df.empty:
+        return df
+
+    first_valid = max(int(df[c].first_valid_index() or 0) for c in subset)
+    out = df.iloc[first_valid:].reset_index(drop=True)
+    logger.info(f"Warmup: {first_valid} filas iniciales descartadas ({len(out)} quedan)")
+
+    intermedias = int(out[subset].isna().any(axis=1).sum())
+    if intermedias:
+        logger.warning(
+            f"{intermedias} filas intermedias con NaN en {subset} (gaps de datos): "
+            "se conservan; el entrenamiento las rellena con 0 (vigilar)"
+        )
     return out
 
 
@@ -370,8 +429,9 @@ def build_features(sentiment_df: Optional[pd.DataFrame] = None,
                    include_patterns: bool = False,
                    save: bool = True) -> Optional[pd.DataFrame]:
     """Pipeline completo de features intradia."""
-    nvda = load_intradia_sheet("NVDA_1H")
-    soxq = load_intradia_sheet("SOXQ_1H")
+    hojas = load_intradia_sheets(("NVDA_1H", "SOXQ_1H"))
+    nvda = hojas.get("NVDA_1H")
+    soxq = hojas.get("SOXQ_1H")
 
     if nvda is None or nvda.empty:
         logger.error("No hay datos intradia NVDA. Corre primero core.data_providers.ibkr_intraday")

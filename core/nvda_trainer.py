@@ -91,6 +91,16 @@ def feature_columns(df: pd.DataFrame) -> List[str]:
             continue
         if pd.api.types.is_numeric_dtype(df[c]):
             cols.append(c)
+
+    # Guarda anti-leakage: niveles de precio crudo jamás deben ser features
+    # (no estacionarios; el modelo aprendería "regimen de precio/epoca").
+    prohibidas = {"Open", "High", "Low", "Close", "Volume", "Adj Close",
+                  "adj_close", "sox_close", "vwap", "orb_high", "orb_low"}
+    intrusas = prohibidas.intersection(cols)
+    if intrusas:
+        raise ValueError(
+            f"Columnas de precio crudo filtrarian informacion al modelo: {sorted(intrusas)}"
+        )
     return cols
 
 
