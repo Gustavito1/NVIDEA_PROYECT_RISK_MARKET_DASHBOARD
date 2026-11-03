@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NVDA Day Trading 1H: Informe BUY/HOLD/SELL · NVIDIA</title>
+<meta name="description" content="Informe cuantitativo de NVDA (NVIDIA) para day trading 1H: señales BUY/HOLD/SELL, backtest walk-forward purgado, KPIs del modelo y financieros, impacto de noticias y análisis SOXQ.">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#0c110d">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230c110d'/%3E%3Crect x='8' y='13' width='4' height='12' rx='1' fill='%2376b900'/%3E%3Crect x='15' y='8' width='4' height='17' rx='1' fill='%234fd98a'/%3E%3Crect x='22' y='11' width='4' height='14' rx='1' fill='%23c8f06a'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<script src="assets/plotly-2.35.2.min.js" charset="utf-8"></script>
+<script>if(!window.Plotly){document.write('<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"><\/script>');}</script>
+<style>/*__CSS__*/</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div>
+      <div class="brand"><span class="brand-mark">NVDA</span><span class="brand-sub">quant report</span></div>
+      <div class="brand-rule" style="margin-top:12px"></div>
+    </div>
+    <nav class="nav" role="tablist" aria-label="Secciones del informe">
+      <button data-tab="fin" id="tabbtn-fin" role="tab" aria-controls="tab-fin" aria-selected="true" class="active"><span class="n">01</span> KPIs Financieros</button>
+      <button data-tab="modelo" id="tabbtn-modelo" role="tab" aria-controls="tab-modelo" aria-selected="false" tabindex="-1"><span class="n">02</span> KPIs del Modelo</button>
+      <button data-tab="datos" id="tabbtn-datos" role="tab" aria-controls="tab-datos" aria-selected="false" tabindex="-1"><span class="n">03</span> Datos 1H &amp; Indicadores</button>
+      <button data-tab="noticias" id="tabbtn-noticias" role="tab" aria-controls="tab-noticias" aria-selected="false" tabindex="-1"><span class="n">04</span> Impacto de Noticias</button>
+      <button data-tab="descriptivo" id="tabbtn-descriptivo" role="tab" aria-controls="tab-descriptivo" aria-selected="false" tabindex="-1"><span class="n">05</span> Dashboard Descriptivo</button>
+      <button data-tab="prescriptivo" id="tabbtn-prescriptivo" role="tab" aria-controls="tab-prescriptivo" aria-selected="false" tabindex="-1"><span class="n">06</span> Dashboard Prescriptivo</button>
+      <button data-tab="auditoria" id="tabbtn-auditoria" role="tab" aria-controls="tab-auditoria" aria-selected="false" tabindex="-1"><span class="n">07</span> Auditoría</button>
+      <button data-tab="sox" id="tabbtn-sox" role="tab" aria-controls="tab-sox" aria-selected="false" tabindex="-1"><span class="n">08</span> SOXQ &amp; NVDA</button>
+    </nav>
+    <div class="side-foot">
+      <b>Modelo:</b> Logistic Regression<br>
+      <b>Target:</b> H barras, &tau; fijo<br>
+      <b>Validación:</b> walk-forward purgado<br><br>
+      __KPI_HEADER__
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="ticker"><div class="ticker-track">
+        <span class="tick">NVDA <b>__SIGNAL_PRICE__</b></span>
+        <span class="tick">SEÑAL <b class="acc">__SIGNAL_LABEL__</b></span>
+        <span class="tick">H=__HORIZON__ · τ=__TAU_PCT__%</span>
+        <span class="tick">OOF AUC <b class="acc">__CARD_OOF_AUC__</b></span>
+        <span class="tick">HOLDOUT AUC <b class="acc">__CARD_HOLD_AUC__</b></span>
+        <span class="tick">OOF F1 <b>__CARD_OOF_F1__</b></span>
+        <span class="tick">RIESGO <b>__RISK_LEVEL__</b></span>
+        <span class="tick">MERCADO <b>__STATE__</b></span>
+        <span class="tick">SENT 24H <b>__SENT_24H__</b></span>
+        <span class="tick">DATOS DESDE <b>2021-06-11</b></span>
+        <!-- repetido para loop continuo -->
+        <span class="tick">NVDA <b>__SIGNAL_PRICE__</b></span>
+        <span class="tick">SEÑAL <b class="acc">__SIGNAL_LABEL__</b></span>
+        <span class="tick">H=__HORIZON__ · τ=__TAU_PCT__%</span>
+        <span class="tick">OOF AUC <b class="acc">__CARD_OOF_AUC__</b></span>
+        <span class="tick">HOLDOUT AUC <b class="acc">__CARD_HOLD_AUC__</b></span>
+        <span class="tick">OOF F1 <b>__CARD_OOF_F1__</b></span>
+        <span class="tick">RIESGO <b>__RISK_LEVEL__</b></span>
+        <span class="tick">MERCADO <b>__STATE__</b></span>
+        <span class="tick">SENT 24H <b>__SENT_24H__</b></span>
+        <span class="tick">DATOS DESDE <b>2021-06-11</b></span>
+      </div></div>
+      <div class="page-head">
+        <h1>NVDA (NVIDIA) Day Trading 1H · Sistema de apoyo a decisiones</h1>
+        <div class="meta">__STATE_REASONS__</div>
+      </div>
+    </header>
+
+    <main class="content">
+
+      <!-- ================= 01 FINANCIERO ================= -->
+      <section class="tab active" id="tab-fin" role="tabpanel" aria-labelledby="tabbtn-fin" tabindex="0">
+        <div class="hero">
+          <div class="kicker">01 · Backtest out-of-sample</div>
+          <h2>KPIs Financieros</h2>
+          <p>Evaluación sobre el bloque holdout (último 20% de sesiones, nunca usado en selección).
+             Ejecución en la barra siguiente a la señal, coste de __COST_BPS__% por cambio de posición.
+             Periodo: __TEST_PERIOD__.</p>
+        </div>
+
+        <div class="cards">
+          <div class="card"><div class="card-label">Sharpe (Long-only)</div><div class="card-value">__FIN_LONG_SHARPE__</div><div class="card-sub">anualizado ×√1,764</div></div>
+          <div class="card"><div class="card-label">Sortino</div><div class="card-value">__FIN_LONG_SORTINO__</div><div class="card-sub">riesgo bajista</div></div>
+          <div class="card"><div class="card-label">Max Drawdown</div><div class="card-value">__FIN_LONG_MDD__</div><div class="card-sub">caída máxima</div></div>
+          <div class="card"><div class="card-label">Calmar</div><div class="card-value">__FIN_LONG_CALMAR__</div><div class="card-sub">retorno / |MDD|</div></div>
+          <div class="card"><div class="card-label">Win Rate</div><div class="card-value">__FIN_LONG_WIN__</div><div class="card-sub">operaciones ganadoras</div></div>
+          <div class="card"><div class="card-label">Profit Factor</div><div class="card-value">__FIN_LONG_PF__</div><div class="card-sub">ganancias / pérdidas</div></div>
+          <div class="card"><div class="card-label">IC Spearman</div><div class="card-value">__FIN_IC__</div><div class="card-sub">score vs retorno futuro</div></div>
+          <div class="card"><div class="card-label">Retorno total</div><div class="card-value">__FIN_LONG_RET__</div><div class="card-sub">holdout</div></div>
+          <div class="card"><div class="card-label">Retorno anualizado</div><div class="card-value">__FIN_LONG_ANN__</div><div class="card-sub">estimado</div></div>
+          <div class="card"><div class="card-label">Operaciones</div><div class="card-value">__FIN_LONG_TRADES__</div><div class="card-sub">cambios de posición</div></div>
+          <div class="card"><div class="card-label">Costes acumulados</div><div class="card-value">__FIN_LONG_COST__</div><div class="card-sub">comisión + slippage asumido</div></div>
+          <div class="card"><div class="card-label">Retorno medio / operación</div><div class="card-value">__FIN_LONG_AVG__</div><div class="card-sub">media de trades</div></div>
+        </div>
+
+        <div class="section"><h3>Curva de equity</h3><div class="rule"></div><span class="hint">holdout · long-only vs long/short vs buy &amp; hold</span></div>
+        <div class="panel"><div id="chart-equity" class="chart"></div></div>
+        <p class="chart-note"><b>Qué muestra:</b> cómo evolucionaría 1 unidad de capital con cada
+          estrategia durante el holdout (__TEST_PERIOD__). La línea <b>plana</b> significa que la
+          estrategia está <b>en efectivo</b>: solo opera cuando hay señal (≈16% de las sesiones),
+          por eso hay tramos horizontales y no implica un error. El eje se puede ampliar con los
+          botones de rango.</p>
+
+        <div class="section"><h3>Drawdown</h3><div class="rule"></div><span class="hint">caída desde máximos</span></div>
+        <div class="panel"><div id="chart-drawdown" class="chart short"></div></div>
+        <p class="chart-note"><b>Qué muestra:</b> la peor caída acumulada de la estrategia
+          long-only desde su último máximo (riesgo de pérdida temporal). Cuanto menos profunda
+          y más corta, mejor.</p>
+
+        <div class="section"><h3>Comparación de estrategias</h3><div class="rule"></div><span class="hint">mismo periodo holdout · coste base __COST_BPS__%</span></div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Estrategia</th><th>Sharpe</th><th>Retorno</th><th>Max DD</th><th>Trades</th></tr></thead>
+          <tbody>
+            <tr><td>Day trading long-only (1 entrada/sesión, salida a H barras o cierre)</td><td class="mono">__FIN_LONG_SHARPE__</td><td class="mono">__FIN_LONG_RET__</td><td class="mono">__FIN_LONG_MDD__</td><td class="mono">__FIN_LONG_TRADES__</td></tr>
+            <tr><td>Day trading long/short (hipotética)</td><td class="mono">__FIN_LS_SHARPE__</td><td class="mono">__FIN_LS_RET__</td><td class="mono">__FIN_LS_MDD__</td><td class="mono">__FIN_LS_TRADES__</td></tr>
+            <tr><td>Argmax sin umbral (referencia)</td><td class="mono">__BT_RAW_SHARPE__</td><td class="mono">__BT_RAW_RET__</td><td class="mono">—</td><td class="mono">—</td></tr>
+            <tr><td>Buy &amp; Hold NVDA (mismas barras)</td><td class="mono">__FIN_BH_SHARPE__</td><td class="mono">__FIN_BH_RET__</td><td class="mono">__FIN_BH_MDD__</td><td class="mono">1</td></tr>
+          </tbody>
+        </table></div>
+        <p class="chart-note"><b>Definiciones:</b> <b>Sharpe</b> = retorno medio por unidad de
+          volatilidad (anualizado ×√1,764 barras); <b>Retorno</b> = variación total del capital en
+          el holdout; <b>Max DD</b> = peor caída desde máximos; <b>Trades</b> = operaciones cerradas.</p>
+
+        <div class="section"><h3>Sensibilidad a los costes</h3><div class="rule"></div><span class="hint">cada operación cambia posición y paga coste</span></div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Coste por cambio</th><th>Sharpe long-only</th><th>Retorno long-only</th><th>Costes long-only</th><th>Sharpe L/S</th><th>Retorno L/S</th><th>Costes L/S</th></tr></thead>
+          <tbody>__COST_SENS_ROWS__</tbody>
+        </table></div>
+        <p class="chart-note">Supuesto del proyecto: __COST_BPS__% por cambio (conservador).
+          Referencia realista para NVDA (muy líquido, orden a mercado): ~__COST_REALISTA__%.
+          A __COST_REALISTA__% la estrategia long-only obtiene Sharpe __FIN_REAL_SHARPE__, retorno
+          __FIN_REAL_RET__ y costes __FIN_REAL_COST__.</p>
+
+        <div class="callout">
+          <b>Metodología (corregida):</b> el backtest usa <b>todas las barras horarias</b> del
+          holdout (__CARD_BARS__ barras, __CARD_SESSIONS__ sesiones) y no solo las etiquetadas.
+          Una entrada por sesión en la primera señal, salida a las H barras o al cierre de sesión
+          (sin overnight). La señal se genera al cierre de t y se ejecuta en t+1. El umbral es
+          __CARD_THRESHOLD__. Los KPIs son netos del coste indicado.
+        </div>
+        <div class="callout danger">
+          <b>Lectura crítica:</b> con __FIN_LONG_TRADES__ operaciones (__FIN_ACTIVE_BARS__ barras
+          en posición de __CARD_BARS__), el t-stat del retorno medio es __FIN_TSTAT__ (&lt; 2 →
+          no significativo). Con coste conservador (__COST_BPS__%) la señal prácticamente no
+          sobrevive; con coste realista (__COST_REALISTA__%) el Sharpe es positivo pero sin
+          significancia estadística. Además, el holdout se usó para elegir tau/H, por lo que las
+          métricas son algo optimistas. Es evidencia preliminar, no una prueba de rentabilidad.
+        </div>
+      </section>
+
+      <!-- ================= 02 MODELO ================= -->
+      <section class="tab" id="tab-modelo" role="tabpanel" aria-labelledby="tabbtn-modelo" tabindex="0">
+        <div class="hero">
+          <div class="kicker">02 · Validación temporal</div>
+          <h2>KPIs del Modelo</h2>
+          <p>OOF = predicciones out-of-fold del walk-forward con purging (4 barras) y embargo (7 barras),
+             evaluadas tras un 50% de entrenamiento inicial (cubren la segunda mitad del desarrollo).
+             HOLDOUT = último bloque temporal, evaluado una sola vez. Baseline de mayoría F1 = __CARD_BASELINE__.</p>
+        </div>
+
+        <div class="cards">
+          <div class="card tone-accent"><div class="card-label">F1 macro OOF</div><div class="card-value">__CARD_OOF_F1__</div><div class="card-sub">baseline __CARD_BASELINE__</div></div>
+          <div class="card tone-accent"><div class="card-label">ROC-AUC OOF</div><div class="card-value">__CARD_OOF_AUC__</div><div class="card-sub">± desv. folds __CARD_AUC_STD__</div></div>
+          <div class="card tone-buy"><div class="card-label">F1 macro HOLDOUT</div><div class="card-value">__CARD_HOLD_F1__</div><div class="card-sub">out-of-sample</div></div>
+          <div class="card tone-buy"><div class="card-label">ROC-AUC HOLDOUT</div><div class="card-value">__CARD_HOLD_AUC__</div><div class="card-sub">objetivo ≥ 0.60</div></div>
+          <div class="card"><div class="card-label">Accuracy</div><div class="card-value">__CARD_ACC__</div><div class="card-sub">holdout (contexto)</div></div>
+          <div class="card"><div class="card-label">Balanced accuracy</div><div class="card-value">__CARD_BALACC__</div><div class="card-sub">holdout</div></div>
+          <div class="card"><div class="card-label">Filas holdout</div><div class="card-value">__CARD_NTEST__</div><div class="card-sub">barras evaluadas</div></div>
+          <div class="card"><div class="card-label">Variables</div><div class="card-value">48</div><div class="card-sub">sin conteos ni patrones</div></div>
+        </div>
+
+        <div class="section"><h3>Matriz de confusión normalizada por fila</h3><div class="rule"></div><span class="hint">% por clase real</span></div>
+        <div class="grid-2">
+          <div class="panel"><h4>OOF (walk-forward)</h4>__CM_OOF__</div>
+          <div class="panel"><h4>HOLDOUT</h4>__CM_HOLD__</div>
+        </div>
+
+        <div class="section"><h3>Métricas por clase</h3><div class="rule"></div><span class="hint">OOF vs HOLDOUT</span></div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Métrica</th><th>OOF</th><th>HOLDOUT</th></tr></thead>
+          <tbody>__KPI_MODEL_ROWS__</tbody>
+        </table></div>
+
+        <div class="section"><h3>Ablaciones de variables</h3><div class="rule"></div><span class="hint">aporte de SOXQ y noticias</span></div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Feature set</th><th>N vars</th><th>F1 OOF</th><th>AUC OOF</th><th>F1 HOLDOUT</th><th>AUC HOLDOUT</th></tr></thead>
+          <tbody>__ABLATION_ROWS__</tbody>
+        </table></div>
+      </section>
+
+      <!-- ================= 03 DATOS ================= -->
+      <section class="tab" id="tab-datos" role="tabpanel" aria-labelledby="tabbtn-datos" tabindex="0">
+        <div class="hero">
+          <div class="kicker">03 · Datos crudos y derivados</div>
+          <h2>OHLCV 1H &amp; Indicadores</h2>
+          <p>Barras horarias RTH (7/día) con los indicadores calculados por el pipeline.
+             Puedes exportar los datasets completos en CSV.</p>
+        </div>
+        <div class="btn-row">
+          <a class="btn" href="data/nvda_features_1h.csv" download
+             title="OHLCV + indicadores calculados en velas de 1 hora">NVDA features 1H</a>
+          <a class="btn" href="data/nvda_labeled_1h.csv" download
+             title="Features + etiqueta BUY/HOLD/SELL (H=4, tau 0.8%)">NVDA etiquetado 1H</a>
+          <a class="btn" href="data/soxq_features_1h.csv" download
+             title="Benchmark SOXQ con sus propios indicadores 1H">SOXQ features 1H</a>
+          <a class="btn" href="data/predictions_holdout.csv" download
+             title="Probabilidades y señal del modelo sobre el holdout">Predicciones holdout</a>
+          <a class="btn" href="data/backtest_holdout.csv" download
+             title="Posiciones y retornos de las estrategias long-only y long/short">Backtest holdout</a>
+          <a class="btn" href="data/news_impact.csv" download
+             title="Noticias NVDA con sentimiento e impacto calculado">Noticias con impacto</a>
+        </div>
+        <div class="dl-grid">
+          <div class="dl"><b>NVDA features 1H</b><span>Características extraídas de velas de 1 hora: OHLCV, técnicos (RSI, MACD, Bollinger, ATR), sesión (VWAP, ORB, gap) y sector. Horas en ET.</span></div>
+          <div class="dl"><b>NVDA etiquetado 1H</b><span>Lo anterior + etiqueta BUY/HOLD/SELL, tau y retorno futuro (H=4). Solo barras con futuro válido dentro de la sesión.</span></div>
+          <div class="dl"><b>SOXQ features 1H</b><span>Benchmark sectorial con los mismos indicadores de 1 hora, para comparar NVDA contra su sector.</span></div>
+          <div class="dl"><b>Predicciones holdout</b><span>Probabilidades p(BUY/HOLD/SELL), señal y retorno realizado de cada barra del bloque de prueba.</span></div>
+          <div class="dl"><b>Backtest holdout</b><span>Posiciones y retornos por barra horaria (todas las barras, 7/día) de la estrategia day-trading long-only y de la variante long/short, más la curva de Buy &amp; Hold.</span></div>
+          <div class="dl"><b>Noticias con impacto</b><span>Noticias NVDA deduplicadas por título con sentimiento, relevancia, polaridad y nivel de impacto (Alto/Medio/Bajo).</span></div>
+        </div>
+
+        <div class="section"><h3>NVDA · últimas 250 barras</h3><div class="rule"></div><span class="hint">tabla completa en el CSV</span></div>
+        <div class="table-wrap">__NVDA_TABLE__</div>
+
+        <div class="section"><h3>SOXQ · últimas 250 barras</h3><div class="rule"></div><span class="hint">benchmark sectorial</span></div>
+        <div class="table-wrap">__SOX_TABLE__</div>
+
+        <div class="callout">
+          Indicadores calculados con periodos en barras de 1 hora: RSI-14, MACD(12,26,9),
+          Bollinger(20,2), ATR-14, SMA-20/50, z-score de volumen, VWAP de sesión, opening range,
+          gap de apertura y métricas relativas NVDA/SOXQ (beta, correlación y alpha de 60 barras).
+        </div>
+      </section>
+
+      <!-- ================= 04 NOTICIAS ================= -->
+      <section class="tab" id="tab-noticias" role="tabpanel" aria-labelledby="tabbtn-noticias" tabindex="0">
+        <div class="hero">
+          <div class="kicker">04 · Alpha Vantage point-in-time</div>
+          <h2>Impacto de Noticias</h2>
+          <p>Impacto = relevancia × |sentimiento|, dividido en terciles (Alto / Medio / Bajo).
+             Las noticias se agrupan por signo: Positivas y Negativas. Sin conteos en el modelo.</p>
+        </div>
+        <div class="legend">
+          <span><i class="dot alto"></i> Alto impacto</span>
+          <span><i class="dot medio"></i> Medio</span>
+          <span><i class="dot bajo"></i> Bajo</span>
+          <span>Noticias históricas: __NEWS_TOTAL__ · últimos 30 días: __NEWS_30D__</span>
+        </div>
+        <div class="panel"><div id="chart-news" class="chart short"></div></div>
+        <p class="chart-note"><b>Qué muestra:</b> matriz de clasificación filas = tipo de noticia
+          (positiva / negativa / neutral), columnas = nivel de impacto (alto / medio / bajo). El
+          número en cada celda es la cantidad de noticias y la intensidad del verde, su magnitud.
+          Así se comparan de un vistazo ambos signos, sin que un volumen mayor de positivas
+          aplaste visualmente a las negativas.</p>
+
+        <div class="section"><h3>Sentimiento Promedio por año</h3><div class="rule"></div><span class="hint">nivel medio (barras) y volumen de noticias (línea)</span></div>
+        <div class="panel"><div id="chart-sent-year" class="chart short"></div></div>
+        <p class="chart-note"><b>Qué muestra:</b> barras = sentimiento medio anual (-1 pesimista
+          a +1 optimista); línea gris = número de noticias del año (escala logarítmica, eje derecho).
+          Sirve para detectar cambios de tono y, sobre todo, la densidad de cobertura informativa.</p>
+        <div class="callout">
+          El <b>nivel</b> de sentimiento es estable (≈ +0.23 a +0.25) en todos los años; lo que cambia
+          es el <b>volumen</b> de noticias descargadas (10×-25× mayor en 2025-2026), por eso las
+          columnas de conteo se excluyeron del modelo. El año 2026 está incompleto (hasta el 17-09).
+        </div>
+
+        <div class="section"><h3>Noticias positivas</h3><div class="rule"></div><span class="hint">top 120 por impacto</span></div>
+        <div class="table-wrap">__POS_NEWS_TABLE__</div>
+
+        <div class="section"><h3>Noticias negativas</h3><div class="rule"></div><span class="hint">top 120 por impacto</span></div>
+        <div class="table-wrap">__NEG_NEWS_TABLE__</div>
+      </section>
+
+      <!-- ================= 05 DESCRIPTIVO ================= -->
+      <section class="tab" id="tab-descriptivo" role="tabpanel" aria-labelledby="tabbtn-descriptivo" tabindex="0">
+        <div class="hero">
+          <div class="kicker">05 · Estado del mercado</div>
+          <h2>Dashboard Descriptivo</h2>
+          <p>Lectura del estado actual del mercado con velas horarias, indicadores de sesión y el
+             flujo de noticias reciente.</p>
+        </div>
+
+        <div class="cards">
+          <div class="card __STATE_TONE__"><div class="card-label">Estado de mercado</div><div class="card-value">__STATE__</div><div class="card-sub">score técnico __STATE_SCORE__</div></div>
+          <div class="card"><div class="card-label">Total noticias (histórico)</div><div class="card-value">__NEWS_TOTAL__</div><div class="card-sub">__NEWS_30D__ en 30 días</div></div>
+          <div class="card __SENT_TONE__"><div class="card-label">Sentimiento promedio 24h</div><div class="card-value">__SENT_24H__</div><div class="card-sub">7 días: __SENT_7D__</div></div>
+          <div class="card"><div class="card-label">Precio NVDA</div><div class="card-value">__SIGNAL_PRICE__</div><div class="card-sub">__SIGNAL_DATETIME__</div></div>
+          <div class="card"><div class="card-label">Volatilidad (ATR%)</div><div class="card-value">__ATR_PCT__</div><div class="card-sub">percentil __RISK_PCTILE__</div></div>
+          <div class="card"><div class="card-label">RSI (14)</div><div class="card-value">__RSI_VALUE__</div><div class="card-sub">sobrecompra &gt; 70</div></div>
+        </div>
+
+        <div class="section"><h3>Velas 1H · NVDA</h3><div class="rule"></div><span class="hint">VWAP + SMA 20/50 + volumen relativo · usa los botones de rango para acercar</span></div>
+        <div class="panel"><div id="chart-candles" class="chart"></div></div>
+        <p class="chart-note"><b>Qué muestra:</b> cada vela es 1 hora de NVDA (7 por sesión).
+          Verde = cierre mayor que apertura (sube), rojo = baja. Líneas: SMA 20 (azul), SMA 50
+          (violeta) y VWAP de sesión (verde punteada). Panel inferior: <b>volumen relativo</b>
+          (volumen de la barra ÷ media de las 20 barras previas); por encima de 1 hay más actividad
+          de lo normal. Se usa volumen relativo porque la columna de volumen del proveedor no es
+          homogénea entre años (viene en unidades distintas), así que el valor absoluto engañaría.</p>
+
+        <div class="section"><h3>Noticias recientes (30 días)</h3><div class="rule"></div><span class="hint">fecha · fuente · título · sentimiento</span></div>
+        <div class="table-wrap">__RECENT_NEWS_TABLE__</div>
+      </section>
+
+      <!-- ================= 06 PRESCRIPTIVO ================= -->
+      <section class="tab" id="tab-prescriptivo" role="tabpanel" aria-labelledby="tabbtn-prescriptivo" tabindex="0">
+        <div class="hero" style="text-align:center">
+          <div class="kicker">06 · Señal, riesgo y escenario</div>
+          <h2 style="font-size:34px;letter-spacing:0.04em">SISTEMA DE APOYO DE INVERSIONES EN ACCIONES DE NVIDIA</h2>
+          <p style="margin:8px auto 0">Salida del modelo sobre la última barra cerrada, factores de
+             recomendación y backtest de los últimos 7 días. No es asesoría financiera.</p>
+        </div>
+
+        <div class="signal-grid">
+          <div class="signal-hero call-__SIGNAL_CLASS__">
+            <div class="card-label">Señal del sistema</div>
+            <div class="call">__SIGNAL_LABEL__</div>
+            <div class="signal-meta">Barra: __SIGNAL_DATETIME__ · Modelo: Logistic Regression · umbral __CARD_THRESHOLD__</div>
+            <div class="prob-bars">
+              <div class="prob-row"><span class="lab">BUY</span><div class="prob-track"><div class="prob-fill buy" style="width:__PROB_BUY__"></div></div><span class="val">__PROB_BUY__</span></div>
+              <div class="prob-row"><span class="lab">HOLD</span><div class="prob-track"><div class="prob-fill hold" style="width:__PROB_HOLD__"></div></div><span class="val">__PROB_HOLD__</span></div>
+              <div class="prob-row"><span class="lab">SELL</span><div class="prob-track"><div class="prob-fill sell" style="width:__PROB_SELL__"></div></div><span class="val">__PROB_SELL__</span></div>
+            </div>
+          </div>
+          <div class="cards" style="grid-template-columns:1fr 1fr;align-content:start">
+            <div class="card tone-accent"><div class="card-label">Probabilidad de éxito</div><div class="card-value">__SUCCESS_PROB__</div><div class="card-sub">modelo para la señal emitida</div></div>
+            <div class="card"><div class="card-label">Precisión histórica</div><div class="card-value">__SUCCESS_HIST__</div><div class="card-sub">clase __SIGNAL_LABEL__ en holdout</div></div>
+            <div class="card"><div class="card-label">Precio actual</div><div class="card-value">__SIGNAL_PRICE__</div><div class="card-sub">último cierre 1H</div></div>
+            <div class="card __RISK_TONE__"><div class="card-label">Nivel de riesgo</div><div class="card-value">__RISK_LEVEL__</div><div class="card-sub">percentil ATR% __RISK_PCTILE__</div></div>
+          </div>
+        </div>
+
+        <div class="section"><h3>Proyección / backtest · últimas 7 sesiones</h3><div class="rule"></div><span class="hint">triángulos = señal del modelo · fondo = dirección LONG / SHORT / FLAT</span></div>
+        <div class="panel"><div id="chart-bt7" class="chart short"></div></div>
+        <p class="chart-note"><b>Qué muestra:</b> línea blanca = precio de NVDA en las últimas
+          7 sesiones; <b>triángulo verde</b> = el modelo emitió BUY, <b>triángulo rojo</b> = SELL;
+          el fondo verde/rojo indica si la estrategia long/short estaba comprada o vendida en ese
+          tramo (gris = fuera del mercado). Línea punteada verde = equity de la estrategia long-only
+          normalizada a 1. No es una predicción: es lo que la señal habría hecho en ese tramo.</p>
+        <div class="table-wrap" style="max-height:340px">__BT7_TABLE__</div>
+
+        <div class="section"><h3>Factores de recomendación</h3><div class="rule"></div><span class="hint">lectura cualitativa del estado</span></div>
+        <div class="factors">__FACTOR_ROWS__</div>
+
+        <div class="section"><h3>Indicadores clave</h3><div class="rule"></div><span class="hint">valores exactos de la última barra</span></div>
+        <div class="table-wrap" style="max-height:420px"><table class="data-table">
+          <thead><tr><th>Indicador</th><th>Valor</th></tr></thead>
+          <tbody>__KEY_IND_ROWS__</tbody>
+        </table></div>
+
+        <div class="callout warn">
+          El sistema no predice precios futuros. La “proyección” es un backtest histórico de la señal
+          sobre el holdout y los factores son descriptivos. Cualquier decisión de inversión es
+          responsabilidad del usuario.
+        </div>
+        <div class="callout">
+          <b>Ventana de señal:</b> con horizonte H=4 barras y target dentro de la misma sesión, las
+          últimas 4 barras de cada día no tienen etiqueta (no hay futuro suficiente en la sesión).
+          El modelo fue entrenado con las primeras 3 barras de cada día (09:30-12:00 ET) y esas son
+          las barras donde su señal es válida; en barras posteriores se muestra como referencia.
+        </div>
+      </section>
+
+      <!-- ================= 07 AUDITORIA ================= -->
+      <section class="tab" id="tab-auditoria" role="tabpanel" aria-labelledby="tabbtn-auditoria" tabindex="0">
+        <div class="hero">
+          <div class="kicker">07 · Interpretación</div>
+          <h2>Auditoría y Glosario</h2>
+          <p>Qué significa cada métrica del informe y cómo se calcula, para lectura no técnica.</p>
+        </div>
+        <div class="section"><h3>1 · KPIs generales del modelo</h3><div class="rule"></div><span class="hint">¿aprende algo la clasificación?</span></div>
+        <div class="glossary">
+          <div class="term"><h5>OOF (Out-of-Fold)</h5><p>Predicciones del modelo hechas sobre bloques que <b>nunca vio</b> durante su entrenamiento, respetando el orden temporal (walk-forward). Es la medida más honesta de aprendizaje.</p></div>
+          <div class="term"><h5>HOLDOUT</h5><p>Bloque final del histórico reservado y evaluado <b>una sola vez</b>. Simula lo que habría pasado al desplegar el modelo en el último tramo.</p></div>
+          <div class="term"><h5>F1 macro</h5><p>Promedio sin ponderar del F1 de BUY, HOLD y SELL. Obliga a que las tres clases funcionen; el baseline de mayoría obtiene __CARD_BASELINE__.</p></div>
+          <div class="term"><h5>ROC-AUC OVR</h5><p>Calidad de ordenamiento de las probabilidades (one-vs-rest). 0.50 = azar; 0.55-0.60 = señal débil; 0.60-0.65 = señal razonable.</p></div>
+          <div class="term"><h5>Precision / Recall</h5><p>Precision = de las señales emitidas, cuántas fueron correctas. Recall = de las oportunidades reales, cuántas se detectaron.</p></div>
+          <div class="term"><h5>Matriz de confusión</h5><p>Tabla real-vs-predicho. Se normaliza por fila: cada celda es el % de veces que una clase real se clasificó como otra.</p></div>
+          <div class="term"><h5>BUY / HOLD / SELL</h5><p>Etiquetas del target: BUY si el retorno futuro supera +τ, SELL si cae por debajo de −τ, HOLD en la zona intermedia.</p></div>
+          <div class="term"><h5>τ (tau) y horizonte H</h5><p>Umbral de movimiento relevante (±0.8%) y horizonte de predicción (4 barras de 1 hora). Se eligen para equilibrar las clases y superar el ruido.</p></div>
+          <div class="term"><h5>Purging y embargo</h5><p>Se eliminan del entrenamiento las filas cuyo futuro solapa con el test (purge) y se deja un margen posterior (embargo), evitando fuga de información.</p></div>
+          <div class="term"><h5>Sesgo de selección</h5><p>El bloque holdout también se usó para comparar variantes (H=3/4, tau 0.6-0.8%), por lo que sus métricas son optimistas. Para una validación estricta conviene reservar un bloque nuevo o usar walk-forward anidado.</p></div>
+        </div>
+
+        <div class="section"><h3>2 · KPIs financieros</h3><div class="rule"></div><span class="hint">¿la señal gana dinero después de costes?</span></div>
+        <div class="glossary">
+          <div class="term"><h5>Sharpe Ratio</h5><p>Retorno medio por unidad de volatilidad, anualizado ×√1,764 barras. Valores &gt; 0 indican retorno ajustado por riesgo positivo.</p></div>
+          <div class="term"><h5>Sortino Ratio</h5><p>Como Sharpe pero solo penaliza la volatilidad negativa (riesgo bajista).</p></div>
+          <div class="term"><h5>Max Drawdown</h5><p>Mayor caída desde un máximo de equity hasta el mínimo posterior. Mide el peor escenario histórico.</p></div>
+          <div class="term"><h5>Calmar / Win Rate / Profit Factor</h5><p>Calmar = retorno anual / |MDD|. Win Rate = % de operaciones ganadoras. Profit Factor = ganancias brutas / pérdidas brutas.</p></div>
+          <div class="term"><h5>IC Spearman</h5><p>Correlación entre el score continuo (p_BUY − p_SELL) y el retorno futuro real. Mide si la señal ordena bien las oportunidades.</p></div>
+          <div class="term"><h5>t-stat del retorno</h5><p>Retorno medio dividido por su error estándar. Si |t| &lt; 2, la ganancia media <b>no es estadísticamente distinguible de cero</b> con la muestra disponible. Es la prueba de significancia del Sharpe.</p></div>
+          <div class="term"><h5>Costes y slippage</h5><p>Cada cambio de posición paga comisión + deslizamiento. El informe usa __COST_BPS__% por cambio (conservador del proyecto) y muestra sensibilidad; en una acción líquida como NVDA el coste realista ronda __COST_REALISTA__%.</p></div>
+          <div class="term"><h5>Sharpe con barras planas</h5><p>El Sharpe se calcula sobre todas las barras (incluidas las de posición 0). Si la estrategia está fuera del mercado la mayor parte del tiempo, el ratio puede inflarse; el t-stat corrige esa lectura.</p></div>
+        </div>
+
+        <div class="section"><h3>3 · Indicadores y datos</h3><div class="rule"></div><span class="hint">variables y calidad de los datos</span></div>
+        <div class="glossary">
+          <div class="term"><h5>RSI / MACD / Bollinger / ATR</h5><p>Indicadores técnicos calculados con ventanas de barras de 1 hora: RSI-14 mide fuerza relativa; MACD, el cruce de medias; Bollinger, posición dentro de la volatilidad; ATR, el rango medio (volatilidad).</p></div>
+          <div class="term"><h5>VWAP y ORB</h5><p>VWAP = precio medio ponderado por volumen de la sesión. ORB = rango de la primera hora; su ruptura es una señal clásica de momentum intradía.</p></div>
+          <div class="term"><h5>Beta / Correlación / Alpha</h5><p>Beta = cuánto amplifica NVDA los movimientos del sector (SOXQ); correlación = grado de acople; alpha = la parte del retorno que NVDA hace por sí sola.</p></div>
+          <div class="term"><h5>Volumen relativo</h5><p>Volumen de la barra ÷ media de 20 barras previas. Se usa en lugar del volumen absoluto porque la columna del proveedor cambia de unidades entre años y no es comparable.</p></div>
+          <div class="term"><h5>Impacto de noticias</h5><p>Impacto = relevancia × |sentimiento|. Terciles: <b>Alto</b> (rojo), <b>Medio</b> (naranja) y <b>Bajo</b> (verde). Se agrupan por signo positivo/negativo.</p></div>
+          <div class="term"><h5>Zona horaria</h5><p>Los cálculos internos usan UTC (IBKR/Alpha Vantage); todas las tablas y CSV del informe se muestran en hora de Nueva York (ET) para coincidir con el horario de mercado.</p></div>
+          <div class="term"><h5>Limitaciones</h5><p>Con datos horarios y noticias heterogéneas, un AUC de ~0.60 es una señal modesta: no garantiza rentabilidad. Los costes y el slippage reales pueden ser mayores.</p></div>
+        </div>
+      </section>
+
+      <!-- ================= 08 SOX ================= -->
+      <section class="tab" id="tab-sox" role="tabpanel" aria-labelledby="tabbtn-sox" tabindex="0">
+        <div class="hero">
+          <div class="kicker">08 · Benchmark sectorial</div>
+          <h2>SOXQ y su influencia en NVDA</h2>
+          <p>SOXQ replica el índice de semiconductores SOX. El modelo aprende el alpha idiosincrático
+             de NVDA frente a su sector: R_NVDA = α + β·R_SOXQ + ε.</p>
+        </div>
+
+        <div class="cards">
+          <div class="card"><div class="card-label">Beta 60 barras</div><div class="card-value">__SOX_BETA__</div><div class="card-sub">sensibilidad al sector</div></div>
+          <div class="card"><div class="card-label">Correlación 60 barras</div><div class="card-value">__SOX_CORR__</div><div class="card-sub">&lt; 0.3 = desacople</div></div>
+          <div class="card"><div class="card-label">SOX ratio z-score</div><div class="card-value">__SOX_RATIO_Z__</div><div class="card-sub">NVDA vs sector</div></div>
+          <div class="card"><div class="card-label">Alpha 1 barra</div><div class="card-value">__SOX_ALPHA__</div><div class="card-sub">residual idiosincrático</div></div>
+        </div>
+
+        <div class="section"><h3>NVDA vs SOXQ (cierres diarios, 180 sesiones)</h3><div class="rule"></div><span class="hint">precios normalizados a 1.0</span></div>
+        <div class="panel"><div id="chart-sox" class="chart short"></div></div>
+        <p class="chart-note"><b>Qué muestra:</b> ambas series normalizadas a 1.0 al inicio de la
+          ventana. Si la línea verde (NVDA) va por encima, NVDA superó al sector. Se usan
+          <b>cierres diarios</b> para evitar que los gaps de apertura (09:30 ET) se vean como
+          saltos intradía falsos dentro de la línea horaria.</p>
+
+        <div class="section"><h3>Beta, correlación y ratio</h3><div class="rule"></div><span class="hint">ventana móvil de 60 barras (≈ 8.5 sesiones)</span></div>
+        <div class="panel"><div id="chart-beta" class="chart short"></div></div>
+        <p class="chart-note"><b>Qué muestra:</b> <b>beta</b> (ámbar) = sensibilidad de NVDA al
+          sector; <b>correlación</b> (azul) = grado de acople; <b>ratio z</b> (gris punteada) =
+          cuán caro/barato está NVDA respecto al sector. Son las mismas variables que entran al
+          modelo, calculadas con 60 barras horarias, por eso oscilan más que un beta mensual.</p>
+
+        <div class="section"><h3>Aporte de SOXQ al modelo</h3><div class="rule"></div><span class="hint">ablación A vs B vs D</span></div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Feature set</th><th>N vars</th><th>F1 OOF</th><th>AUC OOF</th><th>F1 HOLDOUT</th><th>AUC HOLDOUT</th></tr></thead>
+          <tbody>__ABLATION_ROWS__</tbody>
+        </table></div>
+
+        <div class="section"><h3>Coeficientes estandarizados de variables SOXQ</h3><div class="rule"></div><span class="hint">signo e intensidad por clase</span></div>
+        <div class="table-wrap" style="max-height:480px">__SOX_COEF_TABLE__</div>
+
+        <div class="callout">
+          Un beta alto indica que NVDA amplifica los movimientos del sector; la correlación baja
+          señala régimen desacoplado (el alpha propio pesa más). El modelo recibe estas variables
+          junto al retorno relativo de NVDA, de modo que puede distinguir “sube todo el sector” de
+          “NVDA lo hace por sí sola”.
+        </div>
+      </section>
+
+      <footer class="footer">
+        Generado: __KPI_HEADER__ · Fuente: IBKR 1H (NVDA/SOXQ) + Alpha Vantage point-in-time ·
+        Modelo: __KPI_HEADER__.<br>
+        Documento de apoyo académico. No constituye asesoría financiera ni recomendación de inversión.
+      </footer>
+    </main>
+  </div>
+</div>
+
+<script id="report-data" type="application/json">__REPORT_DATA__</script>
+<script>/*__JS__*/</script>
+</body>
+</html>

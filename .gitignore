@@ -1,0 +1,57 @@
+# ============================================================
+# PRECIARIO_NVDA — .gitignore
+# Qué NO se sube a GitHub y por qué.
+# Verificado con: git status / git check-ignore
+# ============================================================
+
+# ── SECRETOS (NUNCA subir: hay credenciales de la DB Aiven) ──
+.env
+.env.*
+!.env.example
+
+# ── Entornos virtuales de Python (pesan GBs) ──
+venv/
+venv*/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Node / tooling de .opencode (igual que node_modules) ──
+node_modules/
+package-lock.json
+bun.lock
+
+# ── Datos y artefactos generados por el pipeline (regenerables) ──
+# features/labels/modelos/backups: se recrean con
+#   python run_nvda.py --train
+core/output/
+data/*.csv
+data/*.xlsx
+!data/.gitkeep
+
+# ── Logs ──
+*.log
+run_nvda.log*
+
+# ── Informe web: solo lo publicable ──
+# nvda_report.html + assets/ (Plotly local) + data/*.csv (botones de
+# descarga del informe) SI se suben porque son lo que se publica.
+# El .rar es una copia empaquetada redundante: no.
+web/REPORT_NVDA/REPORT_NVDA.rar
+
+# ── Basura de SO / editores ──
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# ── Build / tooling Python ──
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/

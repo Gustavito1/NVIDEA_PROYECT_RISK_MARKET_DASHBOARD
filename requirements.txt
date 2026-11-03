@@ -1,0 +1,13 @@
+# PRECIARIO_NVDA — Python 3.11
+# OHLC exclusivamente via IBKR (ibapi oficial)
+ibapi==9.81.1.post1
+psycopg2-binary>=2.9
+pandas>=2.2
+numpy>=1.26
+scikit-learn>=1.4
+xgboost>=2.1
+joblib>=1.4
+requests>=2.31
+scipy>=1.11
+openpyxl>=3.1
+python-dotenv>=1.0
