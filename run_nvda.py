@@ -391,6 +391,9 @@ def main():
     parser.add_argument("--interval", type=int, default=60, help="Minutos entre ciclos (default 60)")
     parser.add_argument("--months", type=int, default=None, help="Meses de historial intradia")
     parser.add_argument("--data-only", action="store_true", help="Solo descargar intradia")
+    parser.add_argument("--incremental", action="store_true",
+                        help="Modo incremental: persiste solo la cola nueva en la DB "
+                             "(bar_features/bar_labels) y predice")
     parser.add_argument("--inspect", action="store_true", help="Diagnostico de datos")
     parser.add_argument("--patterns", action="store_true",
                         help="Calcular los 57 patrones (no usados por el modelo; lento)")
@@ -422,6 +425,20 @@ def main():
         args.skip_labels = True
         args.skip_snapshot = True
         args.skip_predict = True
+
+    if args.incremental:
+        # Modo incremental: calcula/persiste SOLO la cola y reutiliza las
+        # features para la prediccion (sin recalcular todo el historico).
+        from core.incremental import incremental_update
+        try:
+            feat_df = incremental_update()
+        except Exception as e:
+            logger.error(f"Pipeline incremental fallido: {e}")
+            return 1
+        res = step_5_predict(dry_run=args.dry_run, model_name=args.model,
+                             features_df=feat_df)
+        logger.info(f"Prediccion: {res['status'].upper()}")
+        return 0 if res["status"] != "error" else 1
 
     if args.schedule:
         run_scheduled(args)

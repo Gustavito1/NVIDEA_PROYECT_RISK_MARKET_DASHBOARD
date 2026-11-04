@@ -94,8 +94,11 @@ def feature_columns(df: pd.DataFrame) -> List[str]:
 
     # Guarda anti-leakage: niveles de precio crudo jamás deben ser features
     # (no estacionarios; el modelo aprendería "regimen de precio/epoca").
+    # Incluye variantes en minusculas: PostgreSQL plega identificadores sin
+    # comillas y un casing distinto se colaria como feature nueva.
     prohibidas = {"Open", "High", "Low", "Close", "Volume", "Adj Close",
-                  "adj_close", "sox_close", "vwap", "orb_high", "orb_low"}
+                  "adj_close", "open", "high", "low", "close", "volume",
+                  "adj close", "sox_close", "vwap", "orb_high", "orb_low"}
     intrusas = prohibidas.intersection(cols)
     if intrusas:
         raise ValueError(

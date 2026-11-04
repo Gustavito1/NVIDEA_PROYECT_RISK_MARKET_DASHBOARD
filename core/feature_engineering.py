@@ -425,20 +425,18 @@ def _drop_warmup(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def build_features(sentiment_df: Optional[pd.DataFrame] = None,
-                   include_patterns: bool = False,
-                   save: bool = True) -> Optional[pd.DataFrame]:
-    """Pipeline completo de features intradia."""
-    hojas = load_intradia_sheets(("NVDA_1H", "SOXQ_1H"))
-    nvda = hojas.get("NVDA_1H")
-    soxq = hojas.get("SOXQ_1H")
+def assemble_features(nvda: pd.DataFrame,
+                      soxq: Optional[pd.DataFrame],
+                      sentiment_df: Optional[pd.DataFrame] = None,
+                      include_patterns: bool = False) -> pd.DataFrame:
+    """
+    Calcula el bloque de features sobre barras ya cargadas (sin I/O).
 
-    if nvda is None or nvda.empty:
-        logger.error("No hay datos intradia NVDA. Corre primero core.data_providers.ibkr_intraday")
-        return None
-
-    logger.info(f"NVDA barras: {len(nvda)} | SOXQ barras: {0 if soxq is None else len(soxq)}")
-
+    Reutilizado por build_features (historico completo) y por el pipeline
+    incremental (ventana movil). Los rolling solo miran al pasado, asi que
+    una ventana con suficiente warmup genera los mismos valores que el
+    calculo completo.
+    """
     df = compute_technical_features(nvda)
     df = compute_intraday_context(df)
 
@@ -461,7 +459,24 @@ def build_features(sentiment_df: Optional[pd.DataFrame] = None,
     else:
         df["pat_bull_count"] = 0
         df["pat_bear_count"] = 0
+    return df
 
+
+def build_features(sentiment_df: Optional[pd.DataFrame] = None,
+                   include_patterns: bool = False,
+                   save: bool = True) -> Optional[pd.DataFrame]:
+    """Pipeline completo de features intradia (historico completo -> CSV)."""
+    hojas = load_intradia_sheets(("NVDA_1H", "SOXQ_1H"))
+    nvda = hojas.get("NVDA_1H")
+    soxq = hojas.get("SOXQ_1H")
+
+    if nvda is None or nvda.empty:
+        logger.error("No hay datos intradia NVDA. Corre primero core.data_providers.ibkr_intraday")
+        return None
+
+    logger.info(f"NVDA barras: {len(nvda)} | SOXQ barras: {0 if soxq is None else len(soxq)}")
+
+    df = assemble_features(nvda, soxq, sentiment_df, include_patterns)
     df = _drop_warmup(df)
 
     if save:

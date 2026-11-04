@@ -187,7 +187,7 @@ def load_news_articles() -> Optional[pd.DataFrame]:
     esquema normalizado (posiblemente vacio) si la DB responde sin articulos.
     """
     sql = """
-        SELECT title, url, time_published, summary, source,
+        SELECT id, title, url, time_published, summary, source,
                relevance_score, sentiment_score, sentiment_label
         FROM news
         ORDER BY time_published
@@ -196,7 +196,7 @@ def load_news_articles() -> Optional[pd.DataFrame]:
     if df is None:
         return None
 
-    cols = ["published_utc", "ticker", "relevance_score", "score",
+    cols = ["news_id", "published_utc", "ticker", "relevance_score", "score",
             "label", "title", "url", "source"]
     if df.empty:
         logger.warning("DB: tabla news vacia")
@@ -204,6 +204,7 @@ def load_news_articles() -> Optional[pd.DataFrame]:
 
     try:
         out = pd.DataFrame()
+        out["news_id"] = pd.to_numeric(df["id"], errors="coerce").astype("Int64")
         # errors="coerce": una fila con fecha corrupta no puede tumbar el paso
         # de features completo (ademas permite que el fallback 'auto' actue).
         out["published_utc"] = pd.to_datetime(df["time_published"], utc=True,

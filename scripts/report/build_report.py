@@ -328,22 +328,284 @@ def load_news() -> pd.DataFrame:
     news["ticker"] = news["ticker"].astype(str).str.upper()
     news["relevance_score"] = pd.to_numeric(news["relevance_score"], errors="coerce").fillna(0.0)
     news["sentiment_score"] = pd.to_numeric(news["sentiment_score"], errors="coerce").fillna(0.0)
+
+    # Derivadas sobre el conjunto COMPLETO (igual que fact_news_impact en la DB);
+    # el filtrado/dedup posterior es solo de visualizacion.
+    from core.news.alpha_vantage import add_impact_columns
+    news = add_impact_columns(news)
+
     news = news[(news["ticker"] == "NVDA") & (news["relevance_score"] >= 0.3)]
     news = news.sort_values("published_utc").drop_duplicates(subset=["title"], keep="first")
-    news["polarity"] = np.where(news["sentiment_score"] > 0.15, "Positiva",
-                                np.where(news["sentiment_score"] < -0.15, "Negativa", "Neutral"))
-    news["impact_score"] = news["relevance_score"] * news["sentiment_score"].abs()
-    if len(news["impact_score"].dropna()) > 10:
-        q_hi = news["impact_score"].quantile(0.667)
-        q_lo = news["impact_score"].quantile(0.333)
-        news["impact_level"] = np.where(news["impact_score"] >= q_hi, "Alto",
-                                        np.where(news["impact_score"] >= q_lo, "Medio", "Bajo"))
-    else:
-        news["impact_level"] = "Bajo"
-    news["sentiment_label"] = news["sentiment_label"].replace("", np.nan)
-    news["sentiment_label_es"] = news["sentiment_label"].fillna(
-        news["sentiment_score"].map(sentiment_from_score))
     return news
+
+
+# ----------------------------------------------------------------------------
+# 3b. Persistencia en la DB (Fase 2: el informe nace y vive en analytics.*)
+# ----------------------------------------------------------------------------
+def load_frames_db():
+    """
+    features + labeled desde analytics.* (Postgres de escritura).
+    Devuelve (feats_df, labeled_df) o None si la DB no esta disponible.
+    """
+    from core.data_providers.db_sink import query_df
+
+    feats = query_df("SELECT * FROM analytics.fact_market_features "
+                     "WHERE symbol = 'NVDA' ORDER BY ts")
+    labs = query_df("SELECT * FROM analytics.fact_bar_labels ORDER BY ts")
+    if feats is None or labs is None or feats.empty or labs.empty:
+        return None
+
+    # Ojo casing: PostgreSQL plega a minusculas los identificadores sin
+    # comillas (open/high/low/close/volume); se restauran los nombres del
+    # pipeline para no desalinear el modelo ni contaminar el feature space.
+    rename_map = {"ts": "Datetime", "open": "Open", "high": "High", "low": "Low",
+                  "close": "Close", "volume": "Volume", "adj close": "Adj Close"}
+    feats = feats.rename(columns=rename_map)
+    labs = labs.rename(columns=rename_map)
+    feats["Datetime"] = pd.to_datetime(feats["Datetime"], utc=True)
+    labs["Datetime"] = pd.to_datetime(labs["Datetime"], utc=True)
+    feats = feats.drop(columns=[c for c in ("symbol", "timeframe", "computed_at")
+                                if c in feats.columns])
+    labs = labs.drop(columns=[c for c in ("computed_at",) if c in labs.columns])
+    labeled = labs.merge(feats, on="Datetime", how="inner")
+    feats = feats.sort_values("Datetime").reset_index(drop=True)
+    labeled = labeled.sort_values("Datetime").reset_index(drop=True)
+    return feats, labeled
+
+
+def persist_products(evals, news, bars_test, series_specs, fin_specs,
+                     model_meta, live_row) -> None:
+    """
+    Persiste los productos del analisis en analytics.* (idempotente: upsert).
+
+    - fact_news_impact      <- impacto por articulo
+    - fact_model_registry   <- feature_list ordenada, label_map, params, sha256
+    - fact_model_outputs    <- OOF/holdout/live por barra (set de produccion)
+    - fact_backtest_timeseries <- serie por estrategia x coste
+    - fact_model_metrics    <- clasificacion (strategy='model') + financieras
+    - fact_confusion_matrix <- OOF/holdout 3x3
+
+    Un fallo de persistencia NO rompe la generacion del HTML (se loguea).
+    """
+    import json as _json
+    from core.data_providers import db_sink
+
+    mv = model_meta["model_version"]
+    ok, fallos = [], []
+
+    def _try(nombre, fn):
+        try:
+            n = fn()
+            ok.append(f"{nombre}:{n}")
+        except Exception as e:
+            fallos.append(f"{nombre} ({e})")
+            logger.error(f"No se pudo persistir {nombre}: {e}")
+
+    # 1) fact_news_impact: escritor unico = core.incremental.update_news_impact
+    #    (sobre el conjunto COMPLETO de articulos; aqui ya no se persiste para
+    #    evitar que el filtrado de visualizacion deduplique/pierda articulos).
+
+    # 2) registro del modelo
+    reg = pd.DataFrame([model_meta])
+    _try("fact_model_registry",
+         lambda: db_sink.upsert_frame("fact_model_registry", reg, ("model_version",)))
+
+    # 3) predicciones por barra (OOF + holdout del set de produccion + live)
+    d = evals["D_nvda_sox_news"]
+
+    def _outputs(frame, pred, proba, split):
+        m = np.asarray(pred) >= 0
+        price = frame["adj_close"] if "adj_close" in frame.columns else frame["Close"]
+        return pd.DataFrame({
+            "symbol": "NVDA",
+            "timeframe": "intraday",
+            "ts": pd.to_datetime(frame["Datetime"], utc=True)[m].to_numpy(),
+            "model_version": mv,
+            "split": split,
+            "close": np.asarray(price)[m].astype(float),
+            "signal": [IDX_TO_LABEL[int(p)] for p in np.asarray(pred)[m]],
+            "prob_buy": np.asarray(proba)[m, 0].astype(float),
+            "prob_hold": np.asarray(proba)[m, 1].astype(float),
+            "prob_sell": np.asarray(proba)[m, 2].astype(float),
+            "y_true": frame["label"][m].to_numpy(),
+            "future_ret": frame["future_ret"][m].to_numpy(dtype=float),
+        })
+
+    outs = [
+        _outputs(d["dev"], d["oof_pred"], d["oof_proba"], "oof"),
+        _outputs(d["test"], d["holdout_pred"], d["holdout_proba"], "holdout"),
+    ]
+    if live_row is not None:
+        outs.append(pd.DataFrame([live_row]))
+    pred_df = pd.concat(outs, ignore_index=True)
+    _try("fact_model_outputs",
+         lambda: db_sink.upsert_frame("fact_model_outputs", pred_df,
+                                      ("symbol", "timeframe", "ts", "model_version")))
+
+    # 4) series de backtest por estrategia x coste
+    bt_frames = []
+    for strategy, cost_bps, bt in series_specs:
+        eq = np.asarray(bt["equity"], dtype=float)
+        rets = np.asarray(bt["returns"], dtype=float)
+        pos = np.asarray(bt["positions"], dtype=int)
+        changes = np.abs(np.diff(np.concatenate([[0.0], pos.astype(float)])))
+        peak = np.maximum.accumulate(eq)
+        dd = np.where(peak > 0, eq / peak - 1.0, 0.0)
+        sig = bars_test["signal"].map({1: "BUY", -1: "SELL"}).fillna("HOLD")
+        bt_frames.append(pd.DataFrame({
+            "symbol": "NVDA", "timeframe": "intraday",
+            "ts": pd.to_datetime(bars_test["Datetime"], utc=True).to_numpy(),
+            "model_version": mv, "strategy": strategy, "cost_bps": float(cost_bps),
+            "position": pos, "close": bars_test["adj_close"].to_numpy(dtype=float),
+            "signal": sig.to_numpy(), "bar_return": rets, "equity": eq,
+            "drawdown": dd, "trade_cost": changes * (float(cost_bps) / 10000.0),
+        }))
+    bt_df = pd.concat(bt_frames, ignore_index=True)
+    _try("fact_backtest_timeseries",
+         lambda: db_sink.upsert_frame("fact_backtest_timeseries", bt_df,
+                                      ("symbol", "timeframe", "ts", "model_version",
+                                       "strategy", "cost_bps")))
+
+    # 5) metricas: clasificacion (strategy='model') + financieras por escenario
+    met_rows = []
+    for tag, s in evals.items():
+        for split in ("oof", "holdout"):
+            m = s[split]
+            met_rows.append({
+                "symbol": "NVDA", "timeframe": "intraday", "model_version": mv,
+                "split": split, "feature_set": tag, "strategy": "model",
+                "cost_bps": 0.0, "n_features": s["n_features"],
+                "n_eval": m.get("n_eval"), "f1_macro": m.get("f1_macro"),
+                "roc_auc": m.get("roc_auc_ovr"), "accuracy": m.get("accuracy"),
+                "balanced_accuracy": m.get("balanced_accuracy"),
+                "auc_folds_mean": m.get("auc_folds_mean"),
+                "auc_folds_std": m.get("auc_folds_std"),
+                **{f"precision_{k}": m.get(f"precision_{k}") for k in ("buy", "hold", "sell")},
+                **{f"recall_{k}": m.get(f"recall_{k}") for k in ("buy", "hold", "sell")},
+                **{f"f1_{k}": m.get(f"f1_{k}") for k in ("buy", "hold", "sell")},
+            })
+    for strategy, cost_bps, bt in fin_specs:
+        met_rows.append({
+            "symbol": "NVDA", "timeframe": "intraday", "model_version": mv,
+            "split": "holdout", "feature_set": "D_nvda_sox_news",
+            "strategy": strategy, "cost_bps": float(cost_bps),
+            "sharpe": bt.get("sharpe"), "sortino": bt.get("sortino"),
+            "tstat": bt.get("tstat"), "max_drawdown": bt.get("max_dd"),
+            "calmar": bt.get("calmar"), "win_rate": bt.get("win_rate"),
+            "profit_factor": bt.get("profit_factor"),
+            "total_return": bt.get("total_return"),
+            "annualized_return": bt.get("annual_return"),
+            "avg_trade": bt.get("avg_trade"), "total_costs": bt.get("total_costs"),
+            "active_bars": bt.get("active_bars"), "trades": bt.get("n_trades"),
+        })
+    met_df = pd.DataFrame(met_rows)
+    _try("fact_model_metrics",
+         lambda: db_sink.upsert_frame(
+             "fact_model_metrics", met_df,
+             ("symbol", "timeframe", "model_version", "split", "feature_set",
+              "strategy", "cost_bps")))
+
+    # 6) matrices de confusion (solo el set de produccion D: las de A/B
+    #    colisionarian en la PK por model_version y el HTML solo muestra D)
+    cm_rows = []
+    for tag, s in [("D_nvda_sox_news", evals["D_nvda_sox_news"])]:
+        for split in ("oof", "holdout"):
+            cm = s[split].get("confusion_matrix")
+            if not cm:
+                continue
+            for i, actual in enumerate(("BUY", "HOLD", "SELL")):
+                total = sum(cm[i]) or 1
+                for j, predicted in enumerate(("BUY", "HOLD", "SELL")):
+                    cm_rows.append({
+                        "symbol": "NVDA", "timeframe": "intraday",
+                        "model_version": mv, "split": split,
+                        "actual_label": actual, "predicted_label": predicted,
+                        "count_value": int(cm[i][j]),
+                        "row_pct": float(cm[i][j]) / total,
+                    })
+    cm_df = pd.DataFrame(cm_rows)
+    _try("fact_confusion_matrix",
+         lambda: db_sink.upsert_frame(
+             "fact_confusion_matrix", cm_df,
+             ("symbol", "timeframe", "model_version", "split",
+              "actual_label", "predicted_label")))
+
+    logger.info(f"Persistencia DB: OK [{', '.join(ok)}]"
+                + (f" | FALLOS [{', '.join(fallos)}]" if fallos else ""))
+
+
+def hoy_vs_ayer_html() -> str:
+    """Bloque 'Hoy vs Ayer' desde analytics.daily_summary (ultimas 2 sesiones)."""
+    from core.data_providers.db_sink import query_df
+
+    try:
+        ds = query_df("SELECT * FROM analytics.daily_summary ORDER BY date_ny DESC LIMIT 2")
+    except Exception as e:
+        logger.warning(f"daily_summary no disponible: {e}")
+        ds = None
+    if ds is None or ds.empty:
+        return ("<p class='chart-note'>Sin datos en <code>analytics.daily_summary</code> todavía. "
+                "Ejecuta <code>python -m core.incremental</code> para poblarlo.</p>")
+
+    ds = ds.sort_values("date_ny").reset_index(drop=True)
+    hoy = ds.iloc[-1]
+
+    def _num(v, is_pct=False, dec=2):
+        if v is None or (isinstance(v, float) and pd.isna(v)) or v is pd.NaT:
+            return "—"
+        return pct(float(v)) if is_pct else f"{float(v):.{dec}f}"
+
+    def _delta(nuevo, viejo, is_pct=False, dec=2):
+        try:
+            d = float(nuevo) - float(viejo)
+            signo = "+" if d >= 0 else ""
+            return f"{signo}{d * 100:.2f} pp" if is_pct else f"{signo}{d:.{dec}f}"
+        except Exception:
+            return "—"
+
+    filas = []
+    if len(ds) > 1:
+        ayer = ds.iloc[-1 - 1]
+        fecha_a, fecha_h = str(ayer["date_ny"]), str(hoy["date_ny"])
+        specs = [
+            ("Cierre NVDA", "close", False, 2),
+            ("Retorno del día", "day_ret", True, 2),
+            ("Retorno SOXQ", "soxq_day_ret", True, 2),
+            ("Barras de la sesión", "n_bars", False, 0),
+            ("Volatilidad (ATR %)", "atr_pct", True, 2),
+            ("RSI (14)", "rsi_14", False, 1),
+            ("Sentimiento 24h", "sent_avg_24h", False, 3),
+            ("Sentimiento 7d", "sent_avg_7d", False, 3),
+        ]
+        for etiqueta, col, es_pct, dec in specs:
+            filas.append(
+                f"<tr><td>{etiqueta}</td><td class='mono'>{_num(ayer.get(col), es_pct, dec)}</td>"
+                f"<td class='mono'>{_num(hoy.get(col), es_pct, dec)}</td>"
+                f"<td class='mono'>{_delta(hoy.get(col), ayer.get(col), es_pct, dec)}</td></tr>")
+        senales = ("<tr><td>Señales BUY/HOLD/SELL</td>"
+                   f"<td class='mono'>{int(ayer.get('n_buy') or 0)}/{int(ayer.get('n_hold') or 0)}/{int(ayer.get('n_sell') or 0)}</td>"
+                   f"<td class='mono'>{int(hoy.get('n_buy') or 0)}/{int(hoy.get('n_hold') or 0)}/{int(hoy.get('n_sell') or 0)}</td>"
+                   "<td class='mono'>—</td></tr>")
+        ultima = ("<tr><td>Última señal</td>"
+                  f"<td class='mono'>{esc(ayer.get('close_label') or '—')} "
+                  f"(B:{_num(ayer.get('p_buy_close'), True, 0)} · S:{_num(ayer.get('p_sell_close'), True, 0)})</td>"
+                  f"<td class='mono'>{esc(hoy.get('close_label') or '—')} "
+                  f"(B:{_num(hoy.get('p_buy_close'), True, 0)} · S:{_num(hoy.get('p_sell_close'), True, 0)})</td>"
+                  "<td class='mono'>—</td></tr>")
+        cabecera = (f"<tr><th>Métrica</th><th>Ayer · {fecha_a}</th>"
+                    f"<th>Última sesión · {fecha_h}</th><th>Δ</th></tr>")
+    else:
+        ayer, fecha_a = None, "—"
+        fecha_h = str(hoy["date_ny"])
+        filas = [
+            f"<tr><td>Cierre NVDA</td><td class='mono'>—</td><td class='mono'>{_num(hoy.get('close'))}</td><td class='mono'>—</td></tr>",
+            f"<tr><td>Retorno del día</td><td class='mono'>—</td><td class='mono'>{_num(hoy.get('day_ret'), True)}</td><td class='mono'>—</td></tr>",
+        ]
+        senales = ultima = ""
+        cabecera = f"<tr><th>Métrica</th><th>Ayer</th><th>Última sesión · {fecha_h}</th><th>Δ</th></tr>"
+
+    return (f"<table class='data-table'><thead>{cabecera}</thead><tbody>"
+            + "".join(filas) + senales + ultima + "</tbody></table>")
 
 
 # ----------------------------------------------------------------------------
@@ -527,10 +789,23 @@ def render(data: dict, assets: dict) -> str:
 # ----------------------------------------------------------------------------
 def main() -> int:
     logger.info("Cargando dataset etiquetado...")
-    df = load_dataset()
-    feats_df = pd.read_csv(FEATURES_CSV)
-    feats_df["Datetime"] = pd.to_datetime(feats_df["Datetime"], utc=True)
-    feats_df = feats_df.sort_values("Datetime").reset_index(drop=True)
+    # Fase 2: la fuente primaria es la DB (analytics.*); los CSV quedan como
+    # fallback local y como descargas del informe.
+    frames = None
+    try:
+        frames = load_frames_db()
+    except Exception as e:
+        logger.warning(f"DB de analisis no disponible ({e}) - fallback a CSV")
+    if frames is not None:
+        feats_df, df = frames
+        logger.info(f"Dataset desde la DB (analytics.*): {len(feats_df)} barras, "
+                    f"{len(df)} etiquetadas")
+    else:
+        logger.info("Dataset desde CSV (fallback)")
+        df = load_dataset()
+        feats_df = pd.read_csv(FEATURES_CSV)
+        feats_df["Datetime"] = pd.to_datetime(feats_df["Datetime"], utc=True)
+        feats_df = feats_df.sort_values("Datetime").reset_index(drop=True)
     # Si la ultima barra aun no ha cerrado (datos descargados a mitad de sesion),
     # se excluye para la senal y los indicadores en vivo.
     now_utc = pd.Timestamp.now(tz="UTC")
@@ -580,10 +855,28 @@ def main() -> int:
     ic = float(spearmanr(proba_test[:, 0] - proba_test[:, 2],
                          test["future_ret"].to_numpy()).statistic)
 
+    # Escenarios para persistir en la DB (serie por barra + metricas)
+    series_specs = [
+        ("long_only", COST_CONSERVATIVE * 10000, bt_long),
+        ("long_short", COST_CONSERVATIVE * 10000, bt_ls),
+        ("raw", COST_CONSERVATIVE * 10000, bt_raw),
+        ("buy_hold", 0.0, bt_bh),
+    ]
+    fin_specs = [
+        ("long_only", COST_CONSERVATIVE * 10000, bt_long),
+        ("long_short", COST_CONSERVATIVE * 10000, bt_ls),
+        ("raw", COST_CONSERVATIVE * 10000, bt_raw),
+        ("buy_hold", 0.0, bt_bh),
+        ("long_only", COST_REALISTA * 10000, bt_long_real),
+        ("long_short", COST_REALISTA * 10000, bt_ls_real),
+    ]
+
     cost_sens_rows = ""
     for cost in COST_GRID:
         bl = backtest_bars(bars_test, pos_long, cost)
         bs = backtest_bars(bars_test, pos_ls, cost)
+        fin_specs.append(("long_only", cost * 10000, bl))
+        fin_specs.append(("long_short", cost * 10000, bs))
         cost_sens_rows += (
             f"<tr><td class='mono'>{cost * 100:.2f}%</td>"
             f"<td class='mono'>{bl['sharpe']:.2f}</td><td class='mono'>{pct(bl['total_return'])}</td>"
@@ -943,6 +1236,7 @@ def main() -> int:
         "POS_NEWS_TABLE": pos_table,
         "NEG_NEWS_TABLE": neg_table,
         "RECENT_NEWS_TABLE": recent_news_table,
+        "HOY_VS_AYER": hoy_vs_ayer_html(),
         "SOX_COEF_TABLE": sox_coef_table,
         "COST_SENS_ROWS": cost_sens_rows,
         "FIN_LONG_SHARPE": f"{bt_long['sharpe']:.2f}",
@@ -980,6 +1274,52 @@ def main() -> int:
         "TEST_PERIOD": (f"{pd.to_datetime(bars_test['Datetime'].iloc[0], utc=True).date()} → "
                         f"{pd.to_datetime(bars_test['Datetime'].iloc[-1], utc=True).date()}"),
     }
+    # ---------------- persistencia en la DB (Fase 2) ----------------
+    try:
+        import hashlib as _hashlib
+        from datetime import datetime as _dt, timezone as _tz
+
+        _pkl = MODELS_DIR / "modelo_nvda_logreg.pkl"
+        _sha = _hashlib.sha256(_pkl.read_bytes()).hexdigest()
+        _version = f"logreg-D_nvda_sox_news-{_sha[:8]}"
+        _label_map = {}
+        _lm_path = MODELS_DIR / "label_map.json"
+        if _lm_path.exists():
+            _label_map = json.loads(_lm_path.read_text(encoding="utf-8"))
+        model_meta = {
+            "model_version": _version,
+            "model_name": "logreg",
+            "feature_set": "D_nvda_sox_news",
+            "n_features": len(prod_feats),
+            "feature_list": json.dumps(list(prod_feats)),
+            "label_map": json.dumps(_label_map),
+            "params": json.dumps({
+                "horizon_bars": DAYTRADE_HORIZON_BARS, "tau_pct": DAYTRADE_TAU_PCT,
+                "signal_threshold": SIGNAL_PROBA_THRESHOLD,
+                "purge_bars": MODEL_PURGE_BARS, "embargo_bars": MODEL_EMBARGO_BARS,
+                "cost_conservative": COST_CONSERVATIVE, "cost_realista": COST_REALISTA,
+                "data_start": DATA_START_DATE,
+            }),
+            "data_range_start": pd.to_datetime(df["Datetime"].min(), utc=True),
+            "data_range_end": pd.to_datetime(df["Datetime"].max(), utc=True),
+            "artifact_path": str(_pkl),
+            "artifact_sha256": _sha,
+            "trained_at": _dt.fromtimestamp(_pkl.stat().st_mtime, tz=_tz.utc),
+        }
+        live_row = {
+            "symbol": "NVDA", "timeframe": "intraday",
+            "ts": pd.to_datetime(last_dt, utc=True),
+            "model_version": _version, "split": "live",
+            "close": float(last_row["Close"]),
+            "signal": live_signal,
+            "prob_buy": float(p_live[0]), "prob_hold": float(p_live[1]),
+            "prob_sell": float(p_live[2]),
+        }
+        persist_products(evals, news, bars_test, series_specs, fin_specs,
+                         model_meta, live_row)
+    except Exception as e:
+        logger.error(f"Persistencia DB omitida por error: {e}")
+
     html_out = render(data, assets)
     out_path = WEB_DIR / WEB_HTML_NAME
     out_path.write_text(html_out, encoding="utf-8")

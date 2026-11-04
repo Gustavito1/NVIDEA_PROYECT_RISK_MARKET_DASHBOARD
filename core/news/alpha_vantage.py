@@ -26,6 +26,67 @@ logger = logging.getLogger(__name__)
 
 NY_TZ = "America/New_York"
 
+# Mapeo de labels Alpha Vantage (EN) a español para el informe y la DB.
+SENTIMENT_LABEL_ES = {
+    "Bullish": "Alcista",
+    "Somewhat-Bullish": "Algo alcista",
+    "Neutral": "Neutral",
+    "Somewhat-Bearish": "Algo bajista",
+    "Bearish": "Bajista",
+}
+
+
+def sentiment_label_es_from_score(score: float) -> str:
+    """Label en español derivado del score continuo (mismos cortes que Alpha)."""
+    if score >= 0.35:
+        key = "Bullish"
+    elif score >= 0.15:
+        key = "Somewhat-Bullish"
+    elif score > -0.15:
+        key = "Neutral"
+    elif score > -0.35:
+        key = "Somewhat-Bearish"
+    else:
+        key = "Bearish"
+    return SENTIMENT_LABEL_ES[key]
+
+
+def add_impact_columns(arts: pd.DataFrame) -> pd.DataFrame:
+    """
+    Deriva las columnas de impacto por articulo (reglas unicas del informe/DB):
+
+      polarity            Positiva | Neutral | Negativa  (score ± 0.15)
+      impact_score        relevance_score * |score|
+      impact_level        terciles de impact_score (Alto | Medio | Bajo)
+      sentiment_label_es  label traducido al español (o derivado del score)
+
+    Se calcula sobre el conjunto COMPLETO de articulos (antes de filtrar o
+    deduplicar para visualizacion), asi la DB y el informe coinciden.
+    """
+    out = arts.copy()
+    s_col = "score" if "score" in out.columns else "sentiment_score"
+    score = pd.to_numeric(out[s_col], errors="coerce").fillna(0.0)
+    rel = pd.to_numeric(out["relevance_score"], errors="coerce").fillna(1.0)
+
+    out["polarity"] = np.where(score > 0.15, "Positiva",
+                               np.where(score < -0.15, "Negativa", "Neutral"))
+    out["impact_score"] = rel * score.abs()
+    if len(out["impact_score"].dropna()) > 10:
+        q_hi = out["impact_score"].quantile(0.667)
+        q_lo = out["impact_score"].quantile(0.333)
+        out["impact_level"] = np.where(out["impact_score"] >= q_hi, "Alto",
+                                       np.where(out["impact_score"] >= q_lo, "Medio", "Bajo"))
+    else:
+        out["impact_level"] = "Bajo"
+
+    etiquetas = out["label"].replace("", np.nan) if "label" in out.columns \
+        else pd.Series(np.nan, index=out.index)
+    out["sentiment_label_es"] = (
+        etiquetas.map(SENTIMENT_LABEL_ES)
+        .fillna(score.map(sentiment_label_es_from_score))
+    )
+    return out
+
 
 def _parse_published(value: pd.Series) -> pd.Series:
     """Convierte timestamps Alpha Vantage o ISO a UTC."""
